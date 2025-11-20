@@ -13,8 +13,8 @@ import java.util.Base64
 class TTNStream(
     private val objectMapper: ObjectMapper,
 ) {
-    fun ttnUplinkProcessor(builder: StreamsBuilder): KStream<String, String> {
-        val input: KStream<String, String> = builder.stream("ttn-uplink")
+    fun ttnUplinkProcessor(builder: StreamsBuilder): KStream<ByteArray, String> {
+        val input: KStream<ByteArray, String> = builder.stream("ttn-uplink")
         val output =
             input.mapValues { message ->
                 val trimmed = message.trim().removeSurrounding("\"")
