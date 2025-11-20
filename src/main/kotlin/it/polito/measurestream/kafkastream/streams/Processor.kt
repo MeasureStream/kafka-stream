@@ -4,10 +4,12 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import it.polito.measurestream.kafkastream.dto.MeasureDecoded
 import org.apache.kafka.streams.StreamsBuilder
 import org.apache.kafka.streams.kstream.KStream
+import org.springframework.stereotype.Component
 import java.nio.ByteBuffer
 import java.time.Instant
 import java.util.Base64
 
+@Component
 class TTNStream(
     private val objectMapper: ObjectMapper,
 ) {
