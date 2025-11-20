@@ -1,1 +1,1 @@
-rootProject.name = "kafka-stream"
+rootProject.name = "kafkastream"

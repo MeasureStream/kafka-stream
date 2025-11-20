@@ -1,3 +1,13 @@
 spring:
   application:
-    name: kafka-stream
+    name: kafkastream
+
+  kafka:
+    bootstrap-servers: kafka:9092
+
+    streams:
+      application-id: ttn-uplink-stream
+      bootstrap-servers: kafka:9092
+      properties:
+        processing.guarantee: at_least_once
+        auto.offset.reset: earliest

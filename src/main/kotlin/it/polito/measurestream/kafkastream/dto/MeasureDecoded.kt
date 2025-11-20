@@ -1,4 +1,4 @@
-package it.polito.measurestream.kafka_stream.dto
+package it.polito.measurestream.kafkastream.dto
 import java.time.Instant
 
 data class MeasureDecoded(

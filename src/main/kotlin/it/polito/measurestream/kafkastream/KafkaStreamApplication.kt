@@ -1,4 +1,4 @@
-package it.polito.measurestream.kafka_stream
+package it.polito.measurestream.kafkastream
 
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.runApplication
@@ -9,5 +9,5 @@ import org.springframework.kafka.annotation.EnableKafkaStreams
 class KafkaStreamApplication
 
 fun main(args: Array<String>) {
-	runApplication<KafkaStreamApplication>(*args)
+    runApplication<KafkaStreamApplication>(*args)
 }
