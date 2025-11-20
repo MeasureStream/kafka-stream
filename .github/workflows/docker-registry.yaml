@@ -1,0 +1,45 @@
+name: Build Spring Boot and Create Multi-Arch Docker Image
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: 21
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Extract version from build.gradle.kts
+        id: version
+        run: echo "VERSION=$(grep '^version' build.gradle.kts | sed -E 's/version *= *\"(.*)\"/\1/')" >> $GITHUB_OUTPUT
+
+      - name: Build Spring Boot app
+        run: ./gradlew bootJar
+
+      - name: Build and push Docker image (multi-arch)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            christiand9699/kafkastream:latest
+            christiand9699/kafkastream:${{ steps.version.outputs.VERSION }}
+          platforms: linux/amd64,linux/arm64
