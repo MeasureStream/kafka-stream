@@ -1,3 +1,5 @@
+package it.polito.measurestream.kafkastream.configurations
+
 import it.polito.measurestream.kafkastream.streams.TTNStream
 import org.apache.kafka.streams.StreamsBuilder
 import org.springframework.context.annotation.Bean
