@@ -11,5 +11,5 @@ spring:
       properties:
         processing.guarantee: at_least_once
         auto.offset.reset: earliest
-        default.key.serde: org.apache.kafka.common.serialization.Serdes$ByteArraySerde
+        #default.key.serde: org.apache.kafka.common.serialization.Serdes$ByteArraySerde
         default.value.serde: org.apache.kafka.common.serialization.Serdes$StringSerde
