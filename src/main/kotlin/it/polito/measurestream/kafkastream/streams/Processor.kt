@@ -96,7 +96,7 @@ class TTNStream(
                 value = valueFloat.toDouble(),
                 unit = unit,
                 nodeId = nodeId,
-                time = Instant.now(),
+                time = Instant.now().toString(),
             )
 
         return Json.encodeToString<MeasureDecoded>(m)
