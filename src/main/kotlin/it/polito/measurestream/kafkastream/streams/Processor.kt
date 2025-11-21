@@ -8,6 +8,7 @@ import org.apache.kafka.common.serialization.Serdes
 import org.apache.kafka.streams.KeyValue
 import org.apache.kafka.streams.StreamsBuilder
 import org.apache.kafka.streams.kstream.Branched
+import org.apache.kafka.streams.kstream.Consumed
 import org.apache.kafka.streams.kstream.KStream
 import org.apache.kafka.streams.kstream.Produced
 import org.springframework.beans.factory.annotation.Autowired
@@ -23,7 +24,7 @@ class TTNStream(
     private val stringSerde: Serde<String>,
 ) {
     fun ttnUplinkProcessor(builder: StreamsBuilder): KStream<Int, String> {
-        val input: KStream<ByteArray, String> = builder.stream("ttn-uplink")
+        val input: KStream<ByteArray, String> = builder.stream("ttn-uplink", Consumed.with(Serdes.ByteArray(), Serdes.String()))
         val processed: KStream<Int, String> =
             input.map { _, message ->
 
