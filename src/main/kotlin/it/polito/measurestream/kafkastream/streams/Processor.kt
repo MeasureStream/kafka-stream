@@ -3,10 +3,14 @@ import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import it.polito.measurestream.kafkastream.dto.MeasureDecoded
 import it.polito.measurestream.kafkastream.dto.TTNMessage
+import org.apache.kafka.common.serialization.Serde
+import org.apache.kafka.common.serialization.Serdes
 import org.apache.kafka.streams.KeyValue
 import org.apache.kafka.streams.StreamsBuilder
 import org.apache.kafka.streams.kstream.Branched
 import org.apache.kafka.streams.kstream.KStream
+import org.apache.kafka.streams.kstream.Produced
+import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Component
 import java.nio.ByteBuffer
 import java.time.Instant
@@ -15,6 +19,8 @@ import java.util.Base64
 @Component
 class TTNStream(
     private val objectMapper: ObjectMapper,
+    @Autowired
+    private val integerSerde: Serdes.IntegerSerde,
 ) {
     fun ttnUplinkProcessor(builder: StreamsBuilder): KStream<Int, String> {
         val input: KStream<ByteArray, String> = builder.stream("ttn-uplink")
@@ -31,12 +37,18 @@ class TTNStream(
             .split()
             .branch(
                 { key, _ -> key == 1 },
-                Branched.withConsumer { ks -> ks.to("ttn-uplink-measure") },
+                Branched.withConsumer { ks ->
+                    ks.to("ttn-uplink-measure", Produced.with(integerSerde, Serdes.String()))
+                },
             ).branch(
                 { key, _ -> key == 2 },
-                Branched.withConsumer { ks -> ks.to("ttn-uplink-command") },
+                Branched.withConsumer { ks ->
+                    ks.to("ttn-uplink-command", Produced.with(integerSerde, Serdes.String()))
+                },
             ).defaultBranch(
-                Branched.withConsumer { ks -> ks.to("ttn-uplink-error") },
+                Branched.withConsumer { ks ->
+                    ks.to("ttn-uplink-error", Produced.with(integerSerde, Serdes.String()))
+                },
             )
         return processed
         /*
