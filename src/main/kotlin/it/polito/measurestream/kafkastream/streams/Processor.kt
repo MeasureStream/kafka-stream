@@ -16,7 +16,7 @@ import java.util.Base64
 class TTNStream(
     private val objectMapper: ObjectMapper,
 ) {
-    fun ttnUplinkProcessor(builder: StreamsBuilder) {
+    fun ttnUplinkProcessor(builder: StreamsBuilder): KStream<Int, String> {
         val input: KStream<ByteArray, String> = builder.stream("ttn-uplink")
         val processed: KStream<Int, String> =
             input.map { _, message ->
@@ -38,6 +38,7 @@ class TTNStream(
             ).defaultBranch(
                 Branched.withConsumer { ks -> ks.to("ttn-uplink-error") },
             )
+        return processed
         /*
         val output =
             input.mapValues { message ->
