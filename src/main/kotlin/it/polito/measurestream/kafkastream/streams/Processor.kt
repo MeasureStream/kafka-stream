@@ -3,6 +3,8 @@ import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import it.polito.measurestream.kafkastream.dto.MeasureDecoded
 import it.polito.measurestream.kafkastream.dto.TTNMessage
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import org.apache.kafka.common.serialization.Serde
 import org.apache.kafka.common.serialization.Serdes
 import org.apache.kafka.streams.KeyValue
@@ -52,39 +54,6 @@ class TTNStream(
                 },
             )
         return processed
-        /*
-        val output =
-            input.mapValues { message ->
-                val trimmed = message.trim().removeSurrounding("\"")
-                val decoded = Base64.getDecoder().decode(trimmed)
-                try {
-                    val jsonStr = String(decoded)
-                    println("decoded message:  $jsonStr")
-                    val root: JsonNode = objectMapper.readTree(jsonStr)
-                    val frmPayload =
-                        root["uplink_message"]?.get("frm_payload")?.asText()
-                            ?: throw Exception("Missing frm_payload in message")
-                    // Decode Base64
-                    // Convert decoded bytes → Measure object
-                    val fport = root["uplink_message"]?.get("f_port")?.asInt()
-
-                    val bytes = Base64.getDecoder().decode(frmPayload)
-                    when (fport) {
-                        1 -> decodePayload(bytes).toString()
-                        else -> throw Error("fport code not provided $fport")
-                    }
-                    // val decoded = decodePayload(bytes)
-                    // decoded.toString()
-                } catch (e: Exception) {
-                    println("Error parsing message: $message")
-                    e.printStackTrace()
-                    message
-                }
-            }
-         */
-
-        // output.to("ttn-uplink-clean")
-        // return output
     }
 
     private fun decodeMessage(message: String): TTNMessage {
@@ -122,12 +91,15 @@ class TTNStream(
         // 3) nodeId (4 bytes)
         val nodeId = buffer.int.toLong()
 
-        return MeasureDecoded(
-            value = valueFloat.toDouble(),
-            unit = unit,
-            nodeId = nodeId,
-            time = Instant.now(),
-        ).toString()
+        val m =
+            MeasureDecoded(
+                value = valueFloat.toDouble(),
+                unit = unit,
+                nodeId = nodeId,
+                time = Instant.now(),
+            )
+
+        return Json.encodeToString<MeasureDecoded>(m)
     }
 
     private fun decodeUnit(code: Int): String =

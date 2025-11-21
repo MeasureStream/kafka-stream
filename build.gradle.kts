@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "it.polito.measurestream"
-version = "0.1.5-SNAPSHOT"
+version = "0.2.0-SNAPSHOT"
 description = "Kafka Stream "
 
 java {
@@ -32,6 +32,7 @@ dependencies {
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
     implementation("com.fasterxml.jackson.module:jackson-module-kotlin")
     implementation("com.fasterxml.jackson.core:jackson-databind")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
 }
 
 kotlin {
