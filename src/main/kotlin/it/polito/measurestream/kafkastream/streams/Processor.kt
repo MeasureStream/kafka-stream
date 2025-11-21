@@ -20,6 +20,7 @@ import java.util.Base64
 class TTNStream(
     private val objectMapper: ObjectMapper,
     private val integerSerde: Serde<Int>,
+    private val stringSerde: Serde<String>,
 ) {
     fun ttnUplinkProcessor(builder: StreamsBuilder): KStream<Int, String> {
         val input: KStream<ByteArray, String> = builder.stream("ttn-uplink")
