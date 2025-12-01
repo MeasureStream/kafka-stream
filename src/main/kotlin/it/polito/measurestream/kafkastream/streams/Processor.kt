@@ -32,7 +32,7 @@ class TTNStream(
 
                 val ttnmessage = decodeMessage(message)
                 when (ttnmessage.fport) {
-                    1 -> KeyValue(ttnmessage.fport, decodePayload1(ttnmessage.payload))
+                    1 -> KeyValue(ttnmessage.fport, decodePayload1(ttnmessage.payload, ttnmessage.devEUI))
                     else -> KeyValue(ttnmessage.fport, ttnmessage.payload)
                 }
             }
@@ -61,7 +61,7 @@ class TTNStream(
         val decoded = Base64.getDecoder().decode(trimmed)
         try {
             val jsonStr = String(decoded)
-            println("RAW MESSAGE: $jsonStr")
+            // println("RAW MESSAGE: $jsonStr")
             val root: JsonNode = objectMapper.readTree(jsonStr)
             val frmPayload =
                 root["uplink_message"]?.get("frm_payload")?.asText()
@@ -76,10 +76,10 @@ class TTNStream(
                         ?.get("dev_eui")
                         ?.asText()
             // root.get("dev_eui")?.asText()
-            println("This is the dev_eui: $devEui")
+            // println("This is the dev_eui: $devEui")
 
             // beware that frmPayload is encoded
-            return TTNMessage(fport, frmPayload)
+            return TTNMessage(fport, frmPayload, if (devEui.isNullOrEmpty()) "NOT FOUND" else devEui)
         } catch (e: Exception) {
             println("Error parsing message: $message")
             e.printStackTrace()
@@ -87,7 +87,10 @@ class TTNStream(
         }
     }
 
-    private fun decodePayload1(frmPayload: String): String {
+    private fun decodePayload1(
+        frmPayload: String,
+        devEUI: String,
+    ): String {
         val bytes = Base64.getDecoder().decode(frmPayload)
 
         if (bytes.size < 9) { // 6 + 1 + 2
@@ -123,6 +126,8 @@ class TTNStream(
                 unit = decodeUnit(1),
                 nodeId = 1,
                 time = Instant.now().toString(),
+                rssi = rssi,
+                devEUI = devEUI,
             )
 
         return Json.encodeToString<MeasureDecoded>(m)
@@ -149,6 +154,8 @@ class TTNStream(
                 unit = unit,
                 nodeId = nodeId,
                 time = Instant.now().toString(),
+                rssi = -1000,
+                devEUI = "NOT FOUND",
             )
 
         return Json.encodeToString<MeasureDecoded>(m)
