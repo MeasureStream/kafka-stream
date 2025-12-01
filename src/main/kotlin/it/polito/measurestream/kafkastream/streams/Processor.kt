@@ -69,7 +69,7 @@ class TTNStream(
             val fport = root["uplink_message"]?.get("f_port")?.asInt() ?: throw Exception("Missing f_port in the message")
 
             val devEui =
-                root["data"]?.get("end_device_ids")?.get("dev_eui")?.asText()
+                root["end_device_ids"]?.get("dev_eui")?.asText()
                     ?: root["identifiers"]
                         ?.get(0)
                         ?.get("device_ids")
