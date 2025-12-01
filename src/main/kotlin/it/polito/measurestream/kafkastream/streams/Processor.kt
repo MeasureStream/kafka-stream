@@ -61,6 +61,7 @@ class TTNStream(
         val decoded = Base64.getDecoder().decode(trimmed)
         try {
             val jsonStr = String(decoded)
+            println("RAW MESSAGE: $jsonStr")
             val root: JsonNode = objectMapper.readTree(jsonStr)
             val frmPayload =
                 root["uplink_message"]?.get("frm_payload")?.asText()
