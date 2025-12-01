@@ -67,7 +67,14 @@ class TTNStream(
                     ?: throw Exception("Missing frm_payload in message")
             val fport = root["uplink_message"]?.get("f_port")?.asInt() ?: throw Exception("Missing f_port in the message")
 
-            val devEui = root.get("dev_eui")?.asText()
+            val devEui =
+                root["data"]?.get("end_device_ids")?.get("dev_eui")?.asText()
+                    ?: root["identifiers"]
+                        ?.get(0)
+                        ?.get("device_ids")
+                        ?.get("dev_eui")
+                        ?.asText()
+            // root.get("dev_eui")?.asText()
             println("This is the dev_eui: $devEui")
 
             // beware that frmPayload is encoded

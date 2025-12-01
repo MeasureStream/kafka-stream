@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "it.polito.measurestream"
-version = "0.2.1-SNAPSHOT"
+version = "0.2.2-SNAPSHOT"
 description = "Kafka Stream "
 
 java {
