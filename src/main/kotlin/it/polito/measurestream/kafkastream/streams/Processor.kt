@@ -106,10 +106,20 @@ class TTNStream(
         val rssi = buffer.get().toInt()
 
         // 3) Value (2 byte)
-        val value = buffer.short.toDouble()
+        // val value = buffer.short.toDouble()
+        // // byte 7 = LSB, byte 8 = MSB (little-endian)
+        val lsb = bytes[7].toInt() and 0xFF
+        val msb = bytes[8].toInt() and 0xFF
+
+        // ricostruisci int16 signed
+        val raw = (msb shl 8) or lsb
+        val tempInt = if (raw and 0x8000 != 0) raw or -0x10000 else raw
+
+        val temperature = tempInt.toDouble() / 100.0
+
         val m =
             MeasureDecoded(
-                value = value,
+                value = temperature,
                 unit = decodeUnit(1),
                 nodeId = 1,
                 time = Instant.now().toString(),
