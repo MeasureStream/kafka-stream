@@ -81,6 +81,12 @@ class TTNStream(
 
     private fun decodePayload1(frmPayload: String): String {
         val bytes = Base64.getDecoder().decode(frmPayload)
+
+        if (bytes.size < 9) { // 6 + 1 + 2
+            println("Payload too short: ${bytes.size} bytes")
+            return ""
+        }
+
         val buffer = ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.BIG_ENDIAN)
 
         // 1) MAC address (6 byte)
