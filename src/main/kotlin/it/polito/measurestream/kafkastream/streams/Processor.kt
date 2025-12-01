@@ -32,7 +32,7 @@ class TTNStream(
 
                 val ttnmessage = decodeMessage(message)
                 when (ttnmessage.fport) {
-                    1 -> KeyValue(ttnmessage.fport, decodePayload(ttnmessage.payload))
+                    1 -> KeyValue(ttnmessage.fport, decodePayload1(ttnmessage.payload))
                     else -> KeyValue(ttnmessage.fport, ttnmessage.payload)
                 }
             }
@@ -74,6 +74,31 @@ class TTNStream(
             e.printStackTrace()
             throw e
         }
+    }
+
+    private fun decodePayload1(frmPayload: String): String {
+        val bytes = Base64.getDecoder().decode(frmPayload)
+        val buffer = ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.BIG_ENDIAN)
+
+        // 1) MAC address (6 byte)
+        val macBytes = ByteArray(6)
+        buffer.get(macBytes)
+        val mac = macBytes.joinToString(":") { "%02X".format(it) }
+
+        // 2) RSSI (1 byte)
+        val rssi = buffer.get().toInt()
+
+        // 3) Value (2 byte)
+        val value = buffer.short.toDouble()
+        val m =
+            MeasureDecoded(
+                value = value,
+                unit = decodeUnit(1),
+                nodeId = 1,
+                time = Instant.now().toString(),
+            )
+
+        return Json.encodeToString<MeasureDecoded>(m)
     }
 
     private fun decodePayload(frmPayload: String): String {
