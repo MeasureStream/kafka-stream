@@ -10,4 +10,5 @@ data class MeasureDecoded(
     val rssi: Int,
     val devEUI: String,
     val time: String,
+    val LoRarssi: Int,
 )

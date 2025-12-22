@@ -4,4 +4,6 @@ data class TTNMessage(
     val fport: Int,
     val payload: String,
     val devEUI: String,
+    val time: String,
+    val LoRarssi: Int,
 )
