@@ -68,7 +68,7 @@ class TTNStream(
                     ?: throw Exception("Missing frm_payload in message")
             val fport = root["uplink_message"]?.get("f_port")?.asInt() ?: throw Exception("Missing f_port in the message")
             
-            val time = root["uplink_message"]?.get("settings")?.get("time")?.asText() ?: throw Exception("Missing time in the message")
+            val time = root["uplink_message"]?.get("settings")?.get("received_at")?.asText() ?: throw Exception("Missing time in the message")
 
             val rssi: Int = root["uplink_message"]?.get("rx_metadata")?.get(0)?.get("rssi")?.asInt() ?: throw Exception("Missing rssi in the message")
 
