@@ -61,14 +61,16 @@ class TTNStream(
         val decoded = Base64.getDecoder().decode(trimmed)
         try {
             val jsonStr = String(decoded)
-            // println("RAW MESSAGE: $jsonStr")
+             println("RAW MESSAGE: $jsonStr")
             val root: JsonNode = objectMapper.readTree(jsonStr)
             val frmPayload =
                 root["uplink_message"]?.get("frm_payload")?.asText()
                     ?: throw Exception("Missing frm_payload in message")
             val fport = root["uplink_message"]?.get("f_port")?.asInt() ?: throw Exception("Missing f_port in the message")
             
-            val time = root["uplink_message"]?.get("settings")?.get("received_at")?.asText() ?: throw Exception("Missing time in the message")
+            //val time = root["uplink_message"]?.get("settings")?.get("received_at")?.asText() ?: throw Exception("Missing time in the message")
+            val time = root["uplink_message"]?.get("received_at")?.asText() ?: root["uplink_message"]?.get("settings")?.get("time")?.asText()
+                ?: throw Exception("Missing time in the message")
 
             val rssi: Int = root["uplink_message"]?.get("rx_metadata")?.get(0)?.get("rssi")?.asInt() ?: throw Exception("Missing rssi in the message")
 
