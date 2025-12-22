@@ -132,7 +132,7 @@ class TTNStream(
                 value = temperature,
                 unit = decodeUnit(1),
                 nodeId = 1,
-                //time = Instant.now().toString(),
+                // time = Instant.now().toString(),
                 time = time,
                 rssi = rssi,
                 devEUI = devEUI,
@@ -165,6 +165,7 @@ class TTNStream(
                 time = Instant.now().toString(),
                 rssi = -1000,
                 devEUI = "NOT FOUND",
+                LoRarssi = -1000,
             )
 
         return Json.encodeToString<MeasureDecoded>(m)
