@@ -32,7 +32,11 @@ class TTNStream(
 
                 val ttnmessage = decodeMessage(message)
                 when (ttnmessage.fport) {
-                    1 -> KeyValue(ttnmessage.fport, decodePayload1(ttnmessage.payload, ttnmessage.devEUI, ttnmessage.time , ttnmessage.LoRarssi ))
+                    1 ->
+                        KeyValue(
+                            ttnmessage.fport,
+                            decodePayload1(ttnmessage.payload, ttnmessage.devEUI, ttnmessage.time, ttnmessage.LoRarssi),
+                        )
                     else -> KeyValue(ttnmessage.fport, ttnmessage.payload)
                 }
             }
@@ -67,11 +71,15 @@ class TTNStream(
                 root["uplink_message"]?.get("frm_payload")?.asText()
                     ?: throw Exception("Missing frm_payload in message")
             val fport = root["uplink_message"]?.get("f_port")?.asInt() ?: throw Exception("Missing f_port in the message")
-            
+
             val time = root["uplink_message"]?.get("settings")?.get("time")?.asText() ?: throw Exception("Missing time in the message")
 
-            val rssi: Int = root["uplink_message"]?.get("rx_metadata")?.get(0)?.get("rssi")?.asInt() ?: throw Exception("Missing rssi in the message")
-
+            val rssi: Int =
+                root["uplink_message"]
+                    ?.get("rx_metadata")
+                    ?.get(0)
+                    ?.get("rssi")
+                    ?.asInt() ?: throw Exception("Missing rssi in the message")
 
             val devEui =
                 root["end_device_ids"]?.get("dev_eui")?.asText()
@@ -82,9 +90,9 @@ class TTNStream(
                         ?.asText()
             // root.get("dev_eui")?.asText()
             // println("This is the dev_eui: $devEui")
-          
+
             // beware that frmPayload is encoded
-            return TTNMessage(fport, frmPayload, if (devEui.isNullOrEmpty()) "NOT FOUND" else devEui, time, rssi )
+            return TTNMessage(fport, frmPayload, if (devEui.isNullOrEmpty()) "NOT FOUND" else devEui, time, rssi)
         } catch (e: Exception) {
             println("Error parsing message: $message")
             e.printStackTrace()
@@ -127,16 +135,20 @@ class TTNStream(
 
         val temperature = tempInt.toDouble() / 100.0
 
+        val nodeId = if (mac == "B4:3A:31:4E:4F:B7") 1 else 2
+
+        println("MAC ADDRESS is $mac")
+
         val m =
             MeasureDecoded(
                 value = temperature,
                 unit = decodeUnit(1),
-                nodeId = 1,
+                nodeId = nodeId.toLong(),
                 // time = Instant.now().toString(),
                 time = time,
                 rssi = rssi,
                 devEUI = devEUI,
-                LoRarssi = LoRarssi
+                LoRarssi = LoRarssi,
             )
 
         return Json.encodeToString<MeasureDecoded>(m)
