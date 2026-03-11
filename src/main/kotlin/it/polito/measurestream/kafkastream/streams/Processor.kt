@@ -138,7 +138,7 @@ class TTNStream(
 
         val temperature = tempInt.toDouble() / 100.0
 
-        val nodeId = if (mac == "B4:3A:31:4E:4F:B7") 1 else 2
+        val nodeId = if (mac == "B4:3A:31:4E:4F:B5") 1 else 2
 
         println("MAC ADDRESS is $mac")
 
