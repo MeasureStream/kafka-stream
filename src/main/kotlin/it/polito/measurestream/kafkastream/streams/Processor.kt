@@ -203,28 +203,30 @@ class TTNStream(
 
     private fun decodePayload3(frmPayload: String): String {
         val bytes = Base64.getDecoder().decode(frmPayload)
-        val buffer = ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.BIG_ENDIAN)
 
-        // 1) Leggiamo il CUID (4 byte)
-        val cuid = if (bytes.size >= 4) buffer.int else 0
+        // Usiamo LITTLE_ENDIAN perché il tuo sensore trasmette i byte meno significativi prima
+        val buffer = ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.LITTLE_ENDIAN)
 
-        // 2) Leggiamo il MUID (4 byte)
-        // Se il modello è nel primo byte del MUID:
-        val muidRaw = if (bytes.size >= 8) buffer.int else 0
+        // 1) CUID (4 byte - Little Endian)
+        // Usiamo toLong() e la maschera per evitare i numeri negativi (unsigned)
+        val cuid = if (bytes.size >= 4) (buffer.int.toLong() and 0xFFFFFFFFL) else 0L
 
-        // Estraiamo il primo byte (MSB) per il modello
-        // Facciamo uno shift a destra di 24 bit (3 byte) per isolare il primo byte
-        val model = (muidRaw shr 24) and 0xFF
+        // 2) MUID (4 byte - Little Endian)
+        val muidRaw = if (bytes.size >= 8) (buffer.int.toLong() and 0xFFFFFFFFL) else 0L
 
-        // Se il MUID reale è il valore completo o solo i restanti 3 byte,
-        // decidi tu se usare muidRaw o mascherarlo. Qui uso muidRaw:
-        val muid = muidRaw
+        // 3) MODELMU
+        // Se il modello è il byte più significativo (MSB) del MUID:
+        // In Little Endian, dopo aver letto l'intero con buffer.int,
+        // il MSB è quello che era all'ultimo posto nel buffer (offset 7).
+        val model = (muidRaw shr 24) and 0xFFL
 
         val registrationMap = mapOf(
             "CUID" to cuid.toString(),
-            "MUID" to muid.toString(),
+            "MUID" to muidRaw.toString(),
             "MODELMU" to model.toString()
         )
+
+        println("REGISTRATION: CU=$cuid, MU=$muidRaw, MODEL=$model")
 
         return objectMapper.writeValueAsString(registrationMap)
     }
