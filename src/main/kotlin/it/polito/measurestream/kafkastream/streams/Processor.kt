@@ -205,14 +205,21 @@ class TTNStream(
         val bytes = Base64.getDecoder().decode(frmPayload)
         val buffer = ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.BIG_ENDIAN)
 
-        // Esempio di decodifica (modifica i tipi Long/Int in base a come trasmette il firmware)
-        // Se CUID e MUID sono Long (8 byte ciascuno):
-        val cuid = if (bytes.size >= 8) buffer.long else 0L
-        val muid = if (bytes.size >= 16) buffer.long else 0L
-        val model = if (bytes.size >= 17) buffer.get().toInt() else 1
+        // 1) Leggiamo il CUID (4 byte)
+        val cuid = if (bytes.size >= 4) buffer.int else 0
 
-        // Creiamo una mappa o un oggetto anonimo da serializzare in JSON
-        // Deve corrispondere a: CUID, MUID, MODELMU
+        // 2) Leggiamo il MUID (4 byte)
+        // Se il modello è nel primo byte del MUID:
+        val muidRaw = if (bytes.size >= 8) buffer.int else 0
+
+        // Estraiamo il primo byte (MSB) per il modello
+        // Facciamo uno shift a destra di 24 bit (3 byte) per isolare il primo byte
+        val model = (muidRaw shr 24) and 0xFF
+
+        // Se il MUID reale è il valore completo o solo i restanti 3 byte,
+        // decidi tu se usare muidRaw o mascherarlo. Qui uso muidRaw:
+        val muid = muidRaw
+
         val registrationMap = mapOf(
             "CUID" to cuid.toString(),
             "MUID" to muid.toString(),
