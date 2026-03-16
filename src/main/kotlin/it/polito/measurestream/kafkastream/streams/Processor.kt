@@ -205,7 +205,7 @@ class TTNStream(
         val bytes = Base64.getDecoder().decode(frmPayload)
 
         // Usiamo LITTLE_ENDIAN perché il tuo sensore trasmette i byte meno significativi prima
-        val buffer = ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        val buffer = ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.BIG_ENDIAN)
 
         // 1) CUID (4 byte - Little Endian)
         // Usiamo toLong() e la maschera per evitare i numeri negativi (unsigned)
