@@ -37,6 +37,7 @@ class TTNStream(
                             ttnmessage.fport,
                             decodePayload1(ttnmessage.payload, ttnmessage.devEUI, ttnmessage.time, ttnmessage.LoRarssi),
                         )
+                    3 -> KeyValue(3, decodePayload3(ttnmessage.payload))
                     else -> KeyValue(ttnmessage.fport, ttnmessage.payload)
                 }
             }
@@ -52,7 +53,12 @@ class TTNStream(
                 Branched.withConsumer { ks ->
                     ks.to("ttn-uplink-command", Produced.with(integerSerde, Serdes.String()))
                 },
-            ).defaultBranch(
+            )
+            .branch({ key, _ -> key == 3 }, Branched.withConsumer { ks ->
+                // Invio al topic mu-registration per il MeasureManager
+                ks.to("mu-registration", Produced.with(integerSerde, Serdes.String()))
+            })
+            .defaultBranch(
                 Branched.withConsumer { ks ->
                     ks.to("ttn-uplink-error", Produced.with(integerSerde, Serdes.String()))
                 },
@@ -193,4 +199,26 @@ class TTNStream(
             3 -> "Pa"
             else -> "unknown"
         }
+
+
+    private fun decodePayload3(frmPayload: String): String {
+        val bytes = Base64.getDecoder().decode(frmPayload)
+        val buffer = ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.BIG_ENDIAN)
+
+        // Esempio di decodifica (modifica i tipi Long/Int in base a come trasmette il firmware)
+        // Se CUID e MUID sono Long (8 byte ciascuno):
+        val cuid = if (bytes.size >= 8) buffer.long else 0L
+        val muid = if (bytes.size >= 16) buffer.long else 0L
+        val model = if (bytes.size >= 17) buffer.get().toInt() else 1
+
+        // Creiamo una mappa o un oggetto anonimo da serializzare in JSON
+        // Deve corrispondere a: CUID, MUID, MODELMU
+        val registrationMap = mapOf(
+            "CUID" to cuid.toString(),
+            "MUID" to muid.toString(),
+            "MODELMU" to model.toString()
+        )
+
+        return objectMapper.writeValueAsString(registrationMap)
+    }
 }

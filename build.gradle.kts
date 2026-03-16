@@ -3,11 +3,11 @@ plugins {
     kotlin("plugin.spring") version "1.9.25"
     id("org.springframework.boot") version "3.5.7"
     id("io.spring.dependency-management") version "1.1.7"
-    kotlin("plugin.serialization") version "2.2.21"
+    kotlin("plugin.serialization") version "1.9.25"
 }
 
 group = "it.polito.measurestream"
-version = "0.3.0-SNAPSHOT"
+version = "0.3.1-SNAPSHOT"
 description = "Kafka Stream "
 
 java {
