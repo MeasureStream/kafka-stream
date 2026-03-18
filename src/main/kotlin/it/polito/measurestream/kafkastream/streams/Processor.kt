@@ -117,50 +117,47 @@ class TTNStream(
     ): String {
         val bytes = Base64.getDecoder().decode(frmPayload)
 
-        if (bytes.size < 9) { // 6 + 1 + 2
+        // Nuovo check: MUID(4) + RSSI(1) + Temp(2) = 7 byte
+        if (bytes.size < 7) {
             println("Payload too short: ${bytes.size} bytes")
             return ""
         }
 
         val buffer = ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.BIG_ENDIAN)
 
-        // 1) MAC address (6 byte)
-        val macBytes = ByteArray(6)
-        buffer.get(macBytes)
-        val mac = macBytes.joinToString(":") { "%02X".format(it) }
+        // 1) MUID (4 byte) - Lo leggiamo come Int (Unsigned 32-bit nel buffer)
+        val muid = buffer.int.toLong() and 0xFFFFFFFFL
 
         // 2) RSSI (1 byte)
         val rssi = buffer.get().toInt()
 
-        // 3) Value (2 byte)
-        // val value = buffer.short.toDouble()
-        // // byte 7 = LSB, byte 8 = MSB (little-endian)
-        val lsb = bytes[7].toInt() and 0xFF
-        val msb = bytes[8].toInt() and 0xFF
+        // 3) Temperatura (2 byte) - Little Endian come prima
+        // Nota: buffer.int ha spostato la posizione a 4, buffer.get() a 5.
+        // La temperatura è ai byte 5 e 6 (0-indexed)
+        val lsb = bytes[5].toInt() and 0xFF
+        val msb = bytes[6].toInt() and 0xFF
 
-        // ricostruisci int16 signed
+        // Ricostruzione Signed Int16 (Little Endian)
         val raw = (msb shl 8) or lsb
         val tempInt = if (raw and 0x8000 != 0) raw or -0x10000 else raw
-
         val temperature = tempInt.toDouble() / 100.0
 
-        val nodeId = if (mac == "B4:3A:31:4E:4F:B5") 1 else 2
+        // Mappatura del nodeId basata sul MUID invece che sul MAC
+        //val nodeId = if (muid == 1677721601L) 1L else 2L
 
-        println("MAC ADDRESS is $mac")
+        println("MUID ricevuto: $muid | Temp: $temperature | RSSI: $rssi")
 
-        val m =
-            MeasureDecoded(
-                value = temperature,
-                unit = decodeUnit(1),
-                nodeId = nodeId.toLong(),
-                // time = Instant.now().toString(),
-                time = time,
-                rssi = rssi,
-                devEUI = devEUI,
-                LoRarssi = LoRarssi,
-            )
+        val m = MeasureDecoded(
+            value = temperature,
+            unit = "°C", // O decodeUnit(1) se preferisci
+            nodeId = muid,
+            time = time,
+            rssi = rssi,
+            devEUI = devEUI,
+            LoRarssi = LoRarssi,
+        )
 
-        return Json.encodeToString<MeasureDecoded>(m)
+        return Json.encodeToString(m)
     }
 
     private fun decodePayload(frmPayload: String): String {
