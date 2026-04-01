@@ -32,12 +32,10 @@ class TTNStream(
 
                 val ttnmessage = decodeMessage(message)
                 when (ttnmessage.fport) {
-                    1 ->
-                        KeyValue(
-                            ttnmessage.fport,
-                            decodePayload1(ttnmessage.payload, ttnmessage.devEUI, ttnmessage.time, ttnmessage.LoRarssi),
-                        )
-                    3 -> KeyValue(3, decodePayload3(ttnmessage.payload))
+                    1 -> KeyValue(ttnmessage.fport, decodePayload1(ttnmessage.payload, ttnmessage.devEUI, ttnmessage.time, ttnmessage.LoRarssi))
+                    3 -> KeyValue(3, decodePayload3(ttnmessage.payload))// TODO(DA RIMUOVERE ERA LA FPPORT UTILIZZATA IN PRECEDENZA)
+                    10 -> KeyValue(10, decodePayload10(ttnmessage.payload, ttnmessage.devEUI))
+                    16 -> KeyValue(16, decodePayload16(ttnmessage.payload, ttnmessage.devEUI))
                     else -> KeyValue(ttnmessage.fport, ttnmessage.payload)
                 }
             }
@@ -54,9 +52,15 @@ class TTNStream(
                     ks.to("ttn-uplink-command", Produced.with(integerSerde, Serdes.String()))
                 },
             )
-            .branch({ key, _ -> key == 3 }, Branched.withConsumer { ks ->
+            .branch({ key, _ -> key == 3 }, Branched.withConsumer { ks -> // TODO(DA RIMUOVERE ERA LA FPPORT UTILIZZATA IN PRECEDENZA)
                 // Invio al topic mu-registration per il MeasureManager
                 ks.to("mu-registration", Produced.with(integerSerde, Serdes.String()))
+            })
+            .branch({ key, _ -> key == 10 }, Branched.withConsumer { ks ->
+                ks.to("cu-status", Produced.with(integerSerde, Serdes.String()))
+            })
+            .branch({ key, _ -> key == 16 }, Branched.withConsumer { ks ->
+                ks.to("cu-join-notification", Produced.with(integerSerde, Serdes.String()))
             })
             .defaultBranch(
                 Branched.withConsumer { ks ->
@@ -160,44 +164,6 @@ class TTNStream(
         return Json.encodeToString(m)
     }
 
-    private fun decodePayload(frmPayload: String): String {
-        val bytes = Base64.getDecoder().decode(frmPayload)
-
-        val buffer = ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.BIG_ENDIAN)
-
-        // 1) value (4 bytes)
-        val valueFloat = buffer.float
-
-        // 2) unit (2 bytes → codice)
-        val unitCode = buffer.short.toInt() // esempio: 1=°C, 2=%, etc.
-        val unit = decodeUnit(unitCode)
-
-        // 3) nodeId (4 bytes)
-        val nodeId = buffer.int.toLong()
-
-        val m =
-            MeasureDecoded(
-                value = valueFloat.toDouble(),
-                unit = unit,
-                nodeId = nodeId,
-                time = Instant.now().toString(),
-                rssi = -1000,
-                devEUI = "NOT FOUND",
-                LoRarssi = -1000,
-            )
-
-        return Json.encodeToString<MeasureDecoded>(m)
-    }
-
-    private fun decodeUnit(code: Int): String =
-        when (code) {
-            1 -> "°C"
-            2 -> "%"
-            3 -> "Pa"
-            else -> "unknown"
-        }
-
-
     private fun decodePayload3(frmPayload: String): String {
         val bytes = Base64.getDecoder().decode(frmPayload)
 
@@ -226,5 +192,80 @@ class TTNStream(
         println("REGISTRATION: CU=$cuid, MU=$muidRaw, MODEL=$model")
 
         return objectMapper.writeValueAsString(registrationMap)
+    }
+
+    private fun decodePayload10(frmPayload: String, devEUI: String): String {
+        val bytes = Base64.getDecoder().decode(frmPayload)
+
+        // Verifica lunghezza minima: Opcode(1) + Model(2) + Bat(1) + Status(2) = 6 byte
+        if (bytes.size < 6) {
+            println("Payload fport 10 troppo corto: ${bytes.size} bytes")
+            return ""
+        }
+
+        val buffer = ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.BIG_ENDIAN)
+
+        // Byte 0: Opcode (lo leggiamo ma non lo mettiamo nel DTO se non serve)
+        val opcode = buffer.get().toInt() and 0xFF
+
+        // Byte 1-2: CU Model (Short - 2 byte)
+        val model = buffer.short.toInt() and 0xFFFF
+
+        // Byte 3: Battery (1 byte)
+        val battery = buffer.get().toInt() and 0xFF
+
+        // Byte 4-5: Status (Short - 2 byte)
+        val statusRaw = buffer.short.toInt() and 0xFFFF
+
+        // Creiamo il DTO per il MeasureManager
+        // Nota: devEUI viene convertito da stringa HEX (TTN) a Long
+        val update = mapOf(
+            "devEui" to devEUI.toLong(16), // TTN manda HEX, noi vogliamo il Long
+            "model" to model,
+            "batteryLevel" to battery,
+            "statusRaw" to statusRaw
+        )
+
+        println("CU STATUS [FPort 10]: DevEUI=$devEUI, Model=$model, Bat=$battery%, Status=$statusRaw")
+
+        return objectMapper.writeValueAsString(update)
+    }
+
+    private fun decodePayload16(frmPayload: String, devEUI: String): String {
+        val bytes = Base64.getDecoder().decode(frmPayload)
+
+        // Almeno Opcode(1) + 1 MU(5) = 6 byte
+        if (bytes.size < 6) return ""
+
+        val buffer = ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.BIG_ENDIAN)
+
+        // Salta l'Opcode (Byte 0)
+        buffer.get()
+
+        val muList = mutableListOf<Map<String, Any>>()
+
+        // Ogni MU sono 5 byte. Continuiamo finché ci sono almeno 5 byte rimasti
+        while (buffer.remaining() >= 5) {
+            val extendedId = buffer.int.toLong() and 0xFFFFFFFFL
+            val localId = buffer.get().toInt() and 0xFF
+
+            // Estrarre il modello dall'ExtendedID (come fatto in precedenza)
+            // Se il modello sono i primi 8 bit dell'ExtendedID:
+            val model = (extendedId shr 24).toInt() and 0xFF
+
+            muList.add(mapOf(
+                "extendedId" to extendedId,
+                "localId" to localId,
+                "model" to model
+            ))
+        }
+
+        val joinNotification = mapOf(
+            "devEui" to devEUI.toLong(16),
+            "muList" to muList
+        )
+
+        println("JOIN NOTIFICATION: CU=$devEUI, MU trovate=${muList.size}")
+        return objectMapper.writeValueAsString(joinNotification)
     }
 }
