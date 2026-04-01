@@ -197,8 +197,8 @@ class TTNStream(
     private fun decodePayload10(frmPayload: String, devEUI: String): String {
         val bytes = Base64.getDecoder().decode(frmPayload)
 
-        // Verifica lunghezza minima: Opcode(1) + Model(2) + Bat(1) + Status(2) = 6 byte
-        if (bytes.size < 6) {
+        // Verifica lunghezza minima: Model(2) + Bat(1) + Status(2) = 6 byte
+        if (bytes.size < 5) {
             println("Payload fport 10 troppo corto: ${bytes.size} bytes")
             return ""
         }
@@ -206,7 +206,7 @@ class TTNStream(
         val buffer = ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.BIG_ENDIAN)
 
         // Byte 0: Opcode (lo leggiamo ma non lo mettiamo nel DTO se non serve)
-        val opcode = buffer.get().toInt() and 0xFF
+
 
         // Byte 1-2: CU Model (Short - 2 byte)
         val model = buffer.short.toInt() and 0xFFFF
@@ -235,12 +235,11 @@ class TTNStream(
         val bytes = Base64.getDecoder().decode(frmPayload)
 
         // Almeno Opcode(1) + 1 MU(5) = 6 byte
-        if (bytes.size < 6) return ""
+        if (bytes.size < 5) return ""
 
         val buffer = ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.BIG_ENDIAN)
 
-        // Salta l'Opcode (Byte 0)
-        buffer.get()
+
 
         val muList = mutableListOf<Map<String, Any>>()
 
