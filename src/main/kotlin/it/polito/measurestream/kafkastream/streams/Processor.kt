@@ -215,7 +215,11 @@ class TTNStream(
         val model = buffer.short.toInt() and 0xFFFF
 
         // Byte 3: Battery (1 byte)
-        val battery = buffer.get().toInt() and 0xFF
+        val rawbattery = buffer.get().toInt() and 0xFF
+
+        val isCharging = rawbattery == 255
+        
+        val battery = if ( isCharging) 100 else ((rawbattery.toDouble() / 254.0) * 100.0).toInt()
 
         // Byte 4: Status ( 1 byte)
         val statusRaw = buffer.get().toInt() and 0xFFFF
@@ -226,10 +230,11 @@ class TTNStream(
             "devEui" to devEUI.toLong(16), // TTN manda HEX, noi vogliamo il Long
             "model" to model,
             "batteryLevel" to battery,
+            "isCharging" to isCharging,
             "statusRaw" to statusRaw
         )
 
-        println("CU STATUS [FPort 10]: DevEUI=$devEUI, Model=$model, Bat=$battery%, Status=$statusRaw")
+        println("CU STATUS [FPort 10]: DevEUI=$devEUI, Model=$model, Bat=$battery%, isCharging=$isCharging, Status=$statusRaw")
 
         return objectMapper.writeValueAsString(update)
     }
