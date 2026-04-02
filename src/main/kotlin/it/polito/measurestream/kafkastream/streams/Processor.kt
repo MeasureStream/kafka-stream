@@ -201,7 +201,7 @@ class TTNStream(
         val bytes = Base64.getDecoder().decode(frmPayload)
 
         // Verifica lunghezza minima: Model(2) + Bat(1) + Status(2) = 6 byte
-        if (bytes.size < 5) {
+        if (bytes.size < 4) {
             println("Payload fport 10 troppo corto: ${bytes.size} bytes")
             return ""
         }
@@ -217,8 +217,8 @@ class TTNStream(
         // Byte 3: Battery (1 byte)
         val battery = buffer.get().toInt() and 0xFF
 
-        // Byte 4-5: Status (Short - 2 byte)
-        val statusRaw = buffer.short.toInt() and 0xFFFF
+        // Byte 4: Status ( 1 byte)
+        val statusRaw = buffer.get().toInt() and 0xFFFF
 
         // Creiamo il DTO per il MeasureManager
         // Nota: devEUI viene convertito da stringa HEX (TTN) a Long
