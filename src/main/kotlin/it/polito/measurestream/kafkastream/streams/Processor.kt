@@ -253,12 +253,12 @@ class TTNStream(
 
         // Ogni MU sono 5 byte. Continuiamo finché ci sono almeno 5 byte rimasti
         while (buffer.remaining() >= 5) {
-            val extendedId = buffer.int.toLong() and 0xFFFFFFFFL
+            val extendedId = buffer.int
             val localId = buffer.get().toInt() and 0xFF
 
             // Estrarre il modello dall'ExtendedID (come fatto in precedenza)
             // Se il modello sono i primi 8 bit dell'ExtendedID:
-            val model = (extendedId shr 16).toInt() and 0xFFFF
+            val model = (extendedId shr 16) and 0xFFFF
 
             muList.add(mapOf(
                 "extendedId" to extendedId,
