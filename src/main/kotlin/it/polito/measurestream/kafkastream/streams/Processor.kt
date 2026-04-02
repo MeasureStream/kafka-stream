@@ -258,7 +258,7 @@ class TTNStream(
 
             // Estrarre il modello dall'ExtendedID (come fatto in precedenza)
             // Se il modello sono i primi 8 bit dell'ExtendedID:
-            val model = (extendedId shr 24).toInt() and 0xFF
+            val model = (extendedId shr 16).toInt() and 0xFFFF
 
             muList.add(mapOf(
                 "extendedId" to extendedId,
