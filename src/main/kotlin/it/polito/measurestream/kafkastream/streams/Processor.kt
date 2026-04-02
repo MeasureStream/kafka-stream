@@ -38,7 +38,10 @@ class TTNStream(
                     16 -> KeyValue(16, decodePayload16(ttnmessage.payload, ttnmessage.devEUI))
                     else -> KeyValue(ttnmessage.fport, ttnmessage.payload)
                 }
-            }
+            }.filter { _, value ->
+                    value != null && value.isNotBlank()
+                }
+
         processed
             .split()
             .branch(
