@@ -38,7 +38,8 @@ class TTNStream(
                 "devEUI" to ttnMessage.devEUI,
                 "rssi" to ttnMessage.LoRarssi,
                 "dataRate" to ttnMessage.dataRate,
-                "airtime" to ttnMessage.consumedAirtime
+                "airtime" to ttnMessage.consumedAirtime,
+                "time" to ttnMessage.time
             )
             objectMapper.writeValueAsString(signalInfo)
         }.to("ttn-uplink-signal-quality", Produced.with(integerSerde, Serdes.String()))
