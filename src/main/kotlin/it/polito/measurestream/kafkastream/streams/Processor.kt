@@ -27,20 +27,30 @@ class TTNStream(
 ) {
     fun ttnUplinkProcessor(builder: StreamsBuilder): KStream<Int, String> {
         val input: KStream<ByteArray, String> = builder.stream("ttn-uplink", Consumed.with(Serdes.ByteArray(), Serdes.String()))
-        val processed: KStream<Int, String> =
-            input.map { _, message ->
 
-                val ttnmessage = decodeMessage(message)
-                when (ttnmessage.fport) {
-                    1 -> KeyValue(ttnmessage.fport, decodePayload1(ttnmessage.payload, ttnmessage.devEUI, ttnmessage.time, ttnmessage.LoRarssi))
-                    3 -> KeyValue(3, decodePayload3(ttnmessage.payload))// TODO(DA RIMUOVERE ERA LA FPPORT UTILIZZATA IN PRECEDENZA)
-                    10 -> KeyValue(10, decodePayload10(ttnmessage.payload, ttnmessage.devEUI))
-                    16 -> KeyValue(16, decodePayload16(ttnmessage.payload, ttnmessage.devEUI))
-                    else -> KeyValue(ttnmessage.fport, ttnmessage.payload)
-                }
-            }.filter { _, value ->
-                    value != null && value.isNotBlank()
-                }
+        val decodedStream = input.map { _, message ->
+            val ttnMessage = decodeMessage(message)
+            KeyValue(ttnMessage.fport, ttnMessage)
+        }
+
+        decodedStream.mapValues { ttnMessage ->
+            val signalInfo = mapOf(
+                "devEUI" to ttnMessage.devEUI,
+                "rssi" to ttnMessage.LoRarssi,
+                "dataRate" to ttnMessage.dataRate,
+                "airtime" to ttnMessage.consumedAirtime
+            )
+            objectMapper.writeValueAsString(signalInfo)
+        }.to("ttn-uplink-signal-quality", Produced.with(integerSerde, Serdes.String()))
+
+        val processed: KStream<Int, String> = decodedStream.mapValues { ttnMessage ->
+            when (ttnMessage.fport) {
+                1 -> decodePayload1(ttnMessage.payload, ttnMessage.devEUI, ttnMessage.time, ttnMessage.LoRarssi)
+                10 -> decodePayload10(ttnMessage.payload, ttnMessage.devEUI)
+                16 -> decodePayload16(ttnMessage.payload, ttnMessage.devEUI)
+                else -> ttnMessage.payload
+            }
+        }.filter { _, value -> value != null && value.isNotBlank() }
 
         processed
             .split()
@@ -107,8 +117,22 @@ class TTNStream(
             // root.get("dev_eui")?.asText()
             // println("This is the dev_eui: $devEui")
 
+            val uplink = root["uplink_message"] ?: throw Exception("Not an uplink message")
+
+
+            // Estrazione metadati radio (Settings)
+            val settings = uplink["settings"]
+            val dataRateModulation = settings?.get("data_rate")?.get("lora")
+
+            val sf = dataRateModulation?.get("spreading_factor")?.asInt() ?: 0
+            val bw = dataRateModulation?.get("bandwidth")?.asLong() ?: 0L
+            val airtime = uplink["consumed_airtime"]?.asText() ?: "0s"
+            //val payloadSize = getPayloadSize(frmPayload)
+            val dataRate = calculateDataRate(sf, bw)
+
+
             // beware that frmPayload is encoded
-            return TTNMessage(fport, frmPayload, if (devEui.isNullOrEmpty()) "NOT FOUND" else devEui, time, rssi)
+            return TTNMessage(fport, frmPayload, if (devEui.isNullOrEmpty()) "NOT FOUND" else devEui, time, rssi, sf, bw, dataRate, airtime)
         } catch (e: Exception) {
             println("Error parsing message: $message")
             e.printStackTrace()
@@ -274,5 +298,31 @@ class TTNStream(
 
         println("JOIN NOTIFICATION: CU=$devEUI, MU trovate=${muList.size}")
         return objectMapper.writeValueAsString(joinNotification)
+    }
+
+    private fun calculateDataRate(sf: Int, bw: Long): String {
+        return when {
+            sf == 12 && bw == 125000L  -> "DR0"
+            sf == 11 && bw == 125000L  -> "DR1"
+            sf == 10 && bw == 125000L  -> "DR2"
+            sf == 9  && bw == 125000L  -> "DR3"
+            sf == 8  && bw == 125000L -> "DR4"
+            sf == 7  && bw == 125000L -> "DR5"
+            sf == 7  && bw == 250000L -> "DR6"
+            else -> "DR_INVALID_OR_OVERSIZE"
+        }
+    }
+
+    private fun getPayloadSize(base64String: String): Int {
+        if (base64String.isEmpty()) return 0
+
+        val l = base64String.length
+        val padding = when {
+            base64String.endsWith("==") -> 2
+            base64String.endsWith("=") -> 1
+            else -> 0
+        }
+
+        return (l * 3 / 4) - padding
     }
 }

@@ -6,4 +6,8 @@ data class TTNMessage(
     val devEUI: String,
     val time: String,
     val LoRarssi: Int,
+    val spreadingFactor: Int,
+    val bandwidth: Long,
+    val dataRate: String,
+    val consumedAirtime: String
 )
