@@ -36,6 +36,7 @@ class TTNStream(
         decodedStream.mapValues { ttnMessage ->
             val signalInfo = mapOf(
                 "devEUI" to ttnMessage.devEUI,
+                "deviceId" to ttnMessage.deviceId,
                 "rssi" to ttnMessage.LoRarssi,
                 "dataRate" to ttnMessage.dataRate,
                 "airtime" to ttnMessage.consumedAirtime,
@@ -133,9 +134,12 @@ class TTNStream(
             //val payloadSize = getPayloadSize(frmPayload)
             val dataRate = calculateDataRate(sf, bw)
 
+            val deviceIds = root["end_device_ids"]
+            val deviceId = deviceIds?.get("device_id")?.asText() ?: "UNKNOWN_DEVICE"
+
 
             // beware that frmPayload is encoded
-            return TTNMessage(fport, frmPayload, if (devEui.isNullOrEmpty()) "NOT FOUND" else devEui, time, rssi, sf, bw, dataRate, airtime)
+            return TTNMessage(fport, frmPayload, deviceId ,if (devEui.isNullOrEmpty()) "NOT FOUND" else devEui,  time, rssi, sf, bw, dataRate, airtime)
         } catch (e: Exception) {
             println("Error parsing message: $message")
             e.printStackTrace()
@@ -270,18 +274,20 @@ class TTNStream(
         val bytes = Base64.getDecoder().decode(frmPayload)
 
         // Almeno Opcode(1) + 1 MU(5) = 6 byte
-        if (bytes.size < 5) return ""
+        if (bytes.size < 4) return ""
 
         val buffer = ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.BIG_ENDIAN)
 
 
 
         val muList = mutableListOf<Map<String, Any>>()
+        var localIdIndex = 1;
 
-        // Ogni MU sono 5 byte. Continuiamo finché ci sono almeno 5 byte rimasti
-        while (buffer.remaining() >= 5) {
+        // Ogni MU sono 4 byte. Continuiamo finché ci sono almeno 4 byte rimasti
+        while (buffer.remaining() >= 4) {
             val extendedId = buffer.int
-            val localId = buffer.get().toInt() and 0xFF
+            val localId = localIdIndex; //buffer.get().toInt() and 0xFF
+            localIdIndex++;
 
             // Estrarre il modello dall'ExtendedID (come fatto in precedenza)
             // Se il modello sono i primi 8 bit dell'ExtendedID:

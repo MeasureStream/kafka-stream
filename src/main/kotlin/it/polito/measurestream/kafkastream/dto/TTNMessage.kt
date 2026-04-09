@@ -3,6 +3,7 @@ package it.polito.measurestream.kafkastream.dto
 data class TTNMessage(
     val fport: Int,
     val payload: String,
+    val deviceId: String,
     val devEUI: String,
     val time: String,
     val LoRarssi: Int,
