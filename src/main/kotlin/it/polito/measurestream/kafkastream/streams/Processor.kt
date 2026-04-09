@@ -29,9 +29,16 @@ class TTNStream(
         val input: KStream<ByteArray, String> = builder.stream("ttn-uplink", Consumed.with(Serdes.ByteArray(), Serdes.String()))
 
         val decodedStream = input.map { _, message ->
-            val ttnMessage = decodeMessage(message)
-            KeyValue(ttnMessage.fport, ttnMessage)
-        }
+            try {
+                val ttnMessage = decodeMessage(message)
+                KeyValue(ttnMessage.fport, ttnMessage)
+            }catch (e: Exception) {
+
+                println("[STREAM ERROR] Failed to decode message: ${e.message}")
+                println("[RAW PAYLOAD]: $message")
+                null
+            }
+        }.filter { _, v -> v != null }.mapValues { _, v -> v!! }
 
         decodedStream.mapValues { ttnMessage ->
             val signalInfo = mapOf(
