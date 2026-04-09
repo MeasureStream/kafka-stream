@@ -57,8 +57,8 @@ class TTNStream(
         val processed: KStream<Int, String> = decodedStream.mapValues { ttnMessage ->
             when (ttnMessage.fport) {
                 1 -> decodePayload1(ttnMessage.payload, ttnMessage.devEUI, ttnMessage.time, ttnMessage.LoRarssi)
-                10 -> decodePayload10(ttnMessage.payload, ttnMessage.devEUI)
-                16 -> decodePayload16(ttnMessage.payload, ttnMessage.devEUI)
+                10 -> decodePayload10(ttnMessage.payload, ttnMessage.devEUI, ttnMessage.deviceId)
+                16 -> decodePayload16(ttnMessage.payload, ttnMessage.devEUI, ttnMessage.deviceId)
                 else -> ttnMessage.payload
             }
         }.filter { _, value -> value != null && value.isNotBlank() }
@@ -235,7 +235,7 @@ class TTNStream(
         return objectMapper.writeValueAsString(registrationMap)
     }
 
-    private fun decodePayload10(frmPayload: String, devEUI: String): String {
+    private fun decodePayload10(frmPayload: String, devEUI: String, deviceId: String): String {
         val bytes = Base64.getDecoder().decode(frmPayload)
 
         // Verifica lunghezza minima: Model(2) + Bat(1) + Status(2) = 6 byte
@@ -266,6 +266,7 @@ class TTNStream(
         // Nota: devEUI viene convertito da stringa HEX (TTN) a Long
         val update = mapOf(
             "devEui" to devEUI.toLong(16), // TTN manda HEX, noi vogliamo il Long
+            "deviceId" to deviceId,
             "model" to model,
             "batteryLevel" to battery,
             "isCharging" to isCharging,
@@ -277,7 +278,7 @@ class TTNStream(
         return objectMapper.writeValueAsString(update)
     }
 
-    private fun decodePayload16(frmPayload: String, devEUI: String): String {
+    private fun decodePayload16(frmPayload: String, devEUI: String, deviceId: String): String {
         val bytes = Base64.getDecoder().decode(frmPayload)
 
         // Almeno Opcode(1) + 1 MU(5) = 6 byte
@@ -309,6 +310,7 @@ class TTNStream(
 
         val joinNotification = mapOf(
             "devEui" to devEUI.toLong(16),
+            "deviceId" to deviceId,
             "muList" to muList
         )
 
