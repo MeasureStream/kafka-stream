@@ -21,9 +21,15 @@ class DownlinkStreamProcessor(private val objectMapper: ObjectMapper) {
 
     @Bean
     fun downlinkKStream(builder: StreamsBuilder): KStream<String, String> {
+
+        // 1. Configura il Serde per il valore (DTO)
+        val cuConfigSerde = JsonSerde(CUConfigCommandDTO::class.java, objectMapper)
+        cuConfigSerde.deserializer().addTrustedPackages("com.polito.tesi.measuremanager.dtos")
+
+        // 2. Specifica i Serdes dentro Consumed.with
         val inputStr: KStream<String, CUConfigCommandDTO> = builder.stream(
             "cu-configuration",
-            Consumed.with(Serdes.String(), JsonSerde(CUConfigCommandDTO::class.java, objectMapper))
+            Consumed.with(Serdes.String(), cuConfigSerde)
         )
 
         val outputStream: KStream<String, String> = inputStr
