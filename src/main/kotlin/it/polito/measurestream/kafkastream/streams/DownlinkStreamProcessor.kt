@@ -35,7 +35,6 @@ class DownlinkStreamProcessor(private val objectMapper: ObjectMapper) {
                 try {
                     // 1. Prepariamo il payload binario in Base64
                     val payloadBytes = byteArrayOf(
-                        0x0A.toByte(),
                         0x00.toByte(),
                         (command.pollingInterval and 0xFF).toByte()
                     )
@@ -44,7 +43,7 @@ class DownlinkStreamProcessor(private val objectMapper: ObjectMapper) {
                     // 2. Costruiamo l'oggetto interno (il singolo downlink)
                     val downlinkElement = mapOf(
                         "frm_payload" to base64Payload,
-                        "f_port" to 15,
+                        "f_port" to 0x0A,
                         "priority" to "NORMAL",
                         "confirmed" to false
                     )
