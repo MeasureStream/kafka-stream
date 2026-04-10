@@ -4,6 +4,8 @@ spring:
 
   kafka:
     bootstrap-servers: kafka:9092
+    properties:
+      spring.json.trusted.packages: "*"
 
     streams:
       application-id: ttn-uplink-stream
@@ -13,4 +15,4 @@ spring:
         auto.offset.reset: earliest
         #default.key.serde: org.apache.kafka.common.serialization.Serdes$ByteArraySerde
         default.value.serde: org.apache.kafka.common.serialization.Serdes$StringSerde
-        spring.json.trusted.packages: "com.polito.tesi.measuremanager.dtos,java.util,java.lang"
+        spring.json.trusted.packages: "*"
