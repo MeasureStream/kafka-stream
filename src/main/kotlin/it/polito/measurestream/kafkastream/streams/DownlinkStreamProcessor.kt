@@ -22,11 +22,9 @@ class DownlinkStreamProcessor(private val objectMapper: ObjectMapper) {
     @Bean
     fun downlinkKStream(builder: StreamsBuilder): KStream<String, String> {
 
-        // 1. Configura il Serde per il valore (DTO)
         val cuConfigSerde = JsonSerde(CUConfigCommandDTO::class.java, objectMapper)
-        cuConfigSerde.deserializer().addTrustedPackages("com.polito.tesi.measuremanager.dtos")
+        cuConfigSerde.deserializer().addTrustedPackages("*")
 
-        // 2. Specifica i Serdes dentro Consumed.with
         val inputStr: KStream<String, CUConfigCommandDTO> = builder.stream(
             "cu-configuration",
             Consumed.with(Serdes.String(), cuConfigSerde)
@@ -35,29 +33,42 @@ class DownlinkStreamProcessor(private val objectMapper: ObjectMapper) {
         val outputStream: KStream<String, String> = inputStr
             .mapValues { command ->
                 try {
-                    // Protocollo: | 0x0A | 0x00 | Polling (1B) |
+                    // 1. Prepariamo il payload binario in Base64
                     val payloadBytes = byteArrayOf(
                         0x0A.toByte(),
                         0x00.toByte(),
                         (command.pollingInterval and 0xFF).toByte()
                     )
-
                     val base64Payload = Base64.getEncoder().encodeToString(payloadBytes)
 
-                    val ttnMessage = TTNDownlink(
-                        deviceId = command.deviceId,
-                        downlinks = listOf(DownlinkPayload(frmPayload = base64Payload))
+                    // 2. Costruiamo l'oggetto interno (il singolo downlink)
+                    val downlinkElement = mapOf(
+                        "frm_payload" to base64Payload,
+                        "f_port" to 15,
+                        "priority" to "NORMAL",
+                        "confirmed" to false
                     )
 
-                    objectMapper.writeValueAsString(ttnMessage)
+                    // 3. Costruiamo il wrapper finale richiesto da TTN: {"downlinks": [...]}
+                    val ttnFinalWrapper = mapOf(
+                        "downlinks" to listOf(downlinkElement)
+                    )
+
+                    // 4. Serializziamo in stringa JSON
+                    val jsonOutput = objectMapper.writeValueAsString(ttnFinalWrapper)
+
+                    println("DEBUG - Produced JSON: $jsonOutput")
+                    jsonOutput
                 } catch (e: Exception) {
                     println("Errore trasformazione: ${e.message}")
                     null
                 }
             }
             .filter { _, value -> value != null }
-            .mapValues { v -> v!! } // Forza a non-null per il tipo di ritorno
+            .mapValues { v -> v!! }
 
+        // Usiamo il deviceId del comando originale come CHIAVE del messaggio Kafka
+        // Utile per mantenere l'ordine dei messaggi per lo stesso dispositivo
         outputStream.to("ttn-downlink", Produced.with(Serdes.String(), Serdes.String()))
 
         return outputStream
