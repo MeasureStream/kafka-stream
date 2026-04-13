@@ -19,3 +19,12 @@ data class DownlinkPayload(
     val priority: String = "NORMAL",
     val confirmed: Boolean = true
 )
+
+
+data class DownlinkRequestDTO(
+    val deviceId: String,
+    val rawPayload: ByteArray, // Byte grezzi, non ancora Base64
+    val fPort: Int = 15,
+    val priority: String = "NORMAL",
+    val confirmed: Boolean = false
+)
