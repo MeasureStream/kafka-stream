@@ -53,7 +53,7 @@ class DownlinkMqttProcessor(
                     "downlinks" to listOf(
                         mapOf(
                             "frm_payload" to base64Payload,
-                            "f_port" to req.fPort,
+                            "f_port" to req.fport,
                             "priority" to req.priority,
                             "confirmed" to req.confirmed
                         )
