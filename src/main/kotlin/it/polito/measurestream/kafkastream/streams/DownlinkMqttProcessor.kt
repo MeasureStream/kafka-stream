@@ -31,6 +31,10 @@ class DownlinkMqttProcessor(
             userName = mqttUsername
             password = mqttPassword.toCharArray()
             isCleanSession = true
+
+            isAutomaticReconnect = true  // Tenta la riconnessione automatica
+            connectionTimeout = 30       // Tempo massimo di attesa connessione
+            keepAliveInterval = 60
         }
         client.connect(options)
         client
@@ -45,6 +49,12 @@ class DownlinkMqttProcessor(
 
         stream.foreach { _, req ->
             try {
+                // Controllo manuale di sicurezza (nonostante automaticReconnect)
+                if (!mqttClient.isConnected) {
+                    println("MQTT: Client disconnected, attempting manual reconnect...")
+                    mqttClient.reconnect()
+                }
+
                 // Conversione dei byte grezzi in Base64 (richiesta da TTN)
                 val base64Payload = Base64.getEncoder().encodeToString(req.rawPayload)
 
