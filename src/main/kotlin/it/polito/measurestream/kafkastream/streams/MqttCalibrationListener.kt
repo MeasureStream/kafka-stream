@@ -15,9 +15,9 @@ import java.util.zip.GZIPInputStream
 @Component
 class MqttCalibrationListener(
     private val kafkaTemplate: KafkaTemplate<String, String>,
-    @Value("\${mqtt.broker.url}") private val brokerUrl: String,
-    @Value("\${mqtt.username}") private val mqttUsername: String,
-    @Value("\${mqtt.password}") private val mqttPassword: String
+    @Value("\${mosquitto.broker}") private val brokerUrl: String,
+    @Value("\${mosquitto.username}") private val mqttUsername: String,
+    @Value("\${mosquitto.password}") private val mqttPassword: String
 ) {
 
     private lateinit var mqttClient: MqttClient
