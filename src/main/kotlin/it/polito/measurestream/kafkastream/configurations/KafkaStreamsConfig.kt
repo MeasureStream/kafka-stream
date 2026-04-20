@@ -13,10 +13,5 @@ class KafkaStreamsConfig(
 
 ) {
     @Bean
-    fun kStream(builder: StreamsBuilder) {
-        // Avvia il processore TTN (esistente)
-        ttnStream.ttnUplinkProcessor(builder)
-
-
-    }
+    fun kStream(builder: StreamsBuilder) = ttnStream.ttnUplinkProcessor(builder)
 }
