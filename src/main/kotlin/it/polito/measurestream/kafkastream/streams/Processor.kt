@@ -238,7 +238,7 @@ class TTNStream(
     private fun decodePayload10(frmPayload: String, devEUI: String, deviceId: String): String {
         val bytes = Base64.getDecoder().decode(frmPayload)
 
-        // Verifica lunghezza minima: Model(2) + Bat(1) + Status(2) = 6 byte
+        // Verifica lunghezza minima: Model(2) + Bat(1) + Ptx(1) +Status(2) = 6 byte
         if (bytes.size < 4) {
             println("Payload fport 10 troppo corto: ${bytes.size} bytes")
             return ""
@@ -259,6 +259,10 @@ class TTNStream(
         
         val battery = if ( isCharging) 100 else ((rawbattery.toDouble() / 254.0) * 100.0).toInt()
 
+        val ptx = buffer.get().toInt() and 0xFF
+
+        val acPowered = rawbattery == 254
+
         // Byte 4: Status ( 1 byte)
         val statusRaw = buffer.get().toInt() and 0xFFFF
 
@@ -269,11 +273,13 @@ class TTNStream(
             "deviceId" to deviceId,
             "model" to model,
             "batteryLevel" to battery,
+            "ptx" to ptx,
+            "acPowered" to acPowered,
             "isCharging" to isCharging,
             "statusRaw" to statusRaw
         )
 
-        println("CU STATUS [FPort 10]: DevEUI=$devEUI, Model=$model, Bat=$battery%, isCharging=$isCharging, Status=$statusRaw")
+        println("CU STATUS [FPort 10]: DevEUI=$devEUI, Model=$model, Bat=$battery%, isCharging=$isCharging, acPowered=$acPowered, Ptx=$ptx, Status=$statusRaw")
 
         return objectMapper.writeValueAsString(update)
     }
