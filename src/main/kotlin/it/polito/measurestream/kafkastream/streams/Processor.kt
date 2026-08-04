@@ -49,7 +49,9 @@ class TTNStream(
                 "airtime" to ttnMessage.consumedAirtime,
                 "time" to ttnMessage.time,
                 "spreadingFactor" to ttnMessage.spreadingFactor,
-                "bandwidth" to ttnMessage.bandwidth
+                "bandwidth" to ttnMessage.bandwidth,
+                // Frame counter LoRaWAN, consumato da sensor-manager (SignalQualityUpdate.fCnt)
+                "fCnt" to ttnMessage.fCnt
             )
             objectMapper.writeValueAsString(signalInfo)
         }.to("ttn-uplink-signal-quality", Produced.with(integerSerde, Serdes.String()))
@@ -106,6 +108,9 @@ class TTNStream(
                     ?: throw Exception("Missing frm_payload in message")
             val fport = root["uplink_message"]?.get("f_port")?.asInt() ?: throw Exception("Missing f_port in the message")
 
+            // Frame counter LoRaWAN: TTN OMETTE il campo quando vale 0, quindi niente throw, default 0
+            val fCnt = root["uplink_message"]?.get("f_cnt")?.asInt() ?: 0
+
             // val time = root["uplink_message"]?.get("settings")?.get("received_at")?.asText() ?: throw Exception("Missing time in the message")
             val time =
                 root["uplink_message"]?.get("received_at")?.asText() ?: root["uplink_message"]?.get("settings")?.get("time")?.asText()
@@ -146,7 +151,7 @@ class TTNStream(
 
 
             // beware that frmPayload is encoded
-            return TTNMessage(fport, frmPayload, deviceId ,if (devEui.isNullOrEmpty()) "NOT FOUND" else devEui,  time, rssi, sf, bw, dataRate, airtime)
+            return TTNMessage(fport, frmPayload, deviceId ,if (devEui.isNullOrEmpty()) "NOT FOUND" else devEui,  time, rssi, sf, bw, dataRate, airtime, fCnt)
         } catch (e: Exception) {
             println("Error parsing message: $message")
             e.printStackTrace()
