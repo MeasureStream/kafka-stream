@@ -16,3 +16,10 @@ spring:
         #default.key.serde: org.apache.kafka.common.serialization.Serdes$ByteArraySerde
         default.value.serde: org.apache.kafka.common.serialization.Serdes$StringSerde
         spring.json.trusted.packages: "*"
+
+logging:
+  level:
+    root: INFO
+    it.polito.measurestream.kafka-stream: DEBUG
+    org.apache.kafka.streams: INFO
+    org.apache.kafka.clients.consumer: DEBUG
