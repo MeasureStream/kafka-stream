@@ -1,4 +1,5 @@
 package it.polito.measurestream.kafkastream.streams
+
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import it.polito.measurestream.kafkastream.dto.MeasureDecoded
@@ -13,7 +14,7 @@ import org.apache.kafka.streams.kstream.Branched
 import org.apache.kafka.streams.kstream.Consumed
 import org.apache.kafka.streams.kstream.KStream
 import org.apache.kafka.streams.kstream.Produced
-import org.springframework.beans.factory.annotation.Autowired
+import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 import java.nio.ByteBuffer
 import java.time.Instant
@@ -25,21 +26,26 @@ class TTNStream(
     private val integerSerde: Serde<Int>,
     private val stringSerde: Serde<String>,
 ) {
+    private val log = LoggerFactory.getLogger(TTNStream::class.java)
+
     fun ttnUplinkProcessor(builder: StreamsBuilder): KStream<Int, String> {
-        val input: KStream<ByteArray, String> = builder.stream("ttn-uplink", Consumed.with(Serdes.ByteArray(), Serdes.String()))
+        val input: KStream<ByteArray, String> = builder.stream(
+            "ttn-uplink", 
+            Consumed.with(Serdes.ByteArray(), Serdes.String())
+        )
 
         val decodedStream = input.map { _, message ->
             try {
                 val ttnMessage = decodeMessage(message)
                 KeyValue(ttnMessage.fport, ttnMessage)
-            }catch (e: Exception) {
-
-                println("[STREAM ERROR] Failed to decode message: ${e.message}")
-                println("[RAW PAYLOAD]: $message")
+            } catch (e: Exception) {
+                log.error("[STREAM PARSE ERROR] Impossibile decodificare il messaggio TTN grezzo: {}", e.message)
+                log.debug("[RAW PAYLOAD FAILED]: {}", message)
                 null
             }
         }.filter { _, v -> v != null }.mapValues { _, v -> v!! }
 
+        // Pipeline per la qualità del segnale
         decodedStream.mapValues { ttnMessage ->
             val signalInfo = mapOf(
                 "devEUI" to ttnMessage.devEUI,
@@ -50,36 +56,40 @@ class TTNStream(
                 "time" to ttnMessage.time,
                 "spreadingFactor" to ttnMessage.spreadingFactor,
                 "bandwidth" to ttnMessage.bandwidth,
-                // Frame counter LoRaWAN, consumato da sensor-manager (SignalQualityUpdate.fCnt)
                 "fCnt" to ttnMessage.fCnt
             )
             objectMapper.writeValueAsString(signalInfo)
         }.to("ttn-uplink-signal-quality", Produced.with(integerSerde, Serdes.String()))
 
+        // Pipeline per la decodifica specifica per FPort
         val processed: KStream<Int, String> = decodedStream.mapValues { ttnMessage ->
-            when (ttnMessage.fport) {
-                1 -> decodePayload1(ttnMessage.payload, ttnMessage.devEUI, ttnMessage.time, ttnMessage.LoRarssi)
-                10 -> decodePayload10(ttnMessage.payload, ttnMessage.devEUI, ttnMessage.deviceId)
-                16 -> decodePayload16(ttnMessage.payload, ttnMessage.devEUI, ttnMessage.deviceId)
-                else -> ttnMessage.payload
+            try {
+                when (ttnMessage.fport) {
+                    1 -> decodePayload1(ttnMessage.payload, ttnMessage.devEUI, ttnMessage.time, ttnMessage.LoRarssi)
+                    10 -> decodePayload10(ttnMessage.payload, ttnMessage.devEUI, ttnMessage.deviceId)
+                    16 -> decodePayload16(ttnMessage.payload, ttnMessage.devEUI, ttnMessage.deviceId)
+                    else -> {
+                        log.warn("[UNHANDLED FPORT] Nessun decoder registrato per f_port={}", ttnMessage.fport)
+                        ttnMessage.payload
+                    }
+                }
+            } catch (e: Exception) {
+                log.error("[DECODER ERROR] Fallita decodifica payload per f_port={} DevEUI={}: {}", 
+                    ttnMessage.fport, ttnMessage.devEUI, e.message, e)
+                ""
             }
         }.filter { _, value -> value != null && value.isNotBlank() }
 
+        // Partizionamento sui topic Kafka
         processed
             .split()
-            .branch(
-                { key, _ -> key == 1 },
-                Branched.withConsumer { ks ->
-                    ks.to("ttn-uplink-measure", Produced.with(integerSerde, Serdes.String()))
-                },
-            ).branch(
-                { key, _ -> key == 2 },
-                Branched.withConsumer { ks ->
-                    ks.to("ttn-uplink-command", Produced.with(integerSerde, Serdes.String()))
-                },
-            )
-            .branch({ key, _ -> key == 3 }, Branched.withConsumer { ks -> // TODO(DA RIMUOVERE ERA LA FPPORT UTILIZZATA IN PRECEDENZA)
-                // Invio al topic mu-registration per il MeasureManager
+            .branch({ key, _ -> key == 1 }, Branched.withConsumer { ks ->
+                ks.to("ttn-uplink-measure", Produced.with(integerSerde, Serdes.String()))
+            })
+            .branch({ key, _ -> key == 2 }, Branched.withConsumer { ks ->
+                ks.to("ttn-uplink-command", Produced.with(integerSerde, Serdes.String()))
+            })
+            .branch({ key, _ -> key == 3 }, Branched.withConsumer { ks ->
                 ks.to("mu-registration", Produced.with(integerSerde, Serdes.String()))
             })
             .branch({ key, _ -> key == 10 }, Branched.withConsumer { ks ->
@@ -88,193 +98,134 @@ class TTNStream(
             .branch({ key, _ -> key == 16 }, Branched.withConsumer { ks ->
                 ks.to("cu-join-notification", Produced.with(integerSerde, Serdes.String()))
             })
-            .defaultBranch(
-                Branched.withConsumer { ks ->
-                    ks.to("ttn-uplink-error", Produced.with(integerSerde, Serdes.String()))
-                },
-            )
+            .defaultBranch(Branched.withConsumer { ks ->
+                ks.to("ttn-uplink-error", Produced.with(integerSerde, Serdes.String()))
+            })
+
         return processed
     }
 
     private fun decodeMessage(message: String): TTNMessage {
         val trimmed = message.trim().removeSurrounding("\"")
-        val decoded = Base64.getDecoder().decode(trimmed)
-        try {
-            val jsonStr = String(decoded)
-            println("RAW MESSAGE: $jsonStr")
-            val root: JsonNode = objectMapper.readTree(jsonStr)
-            val frmPayload =
-                root["uplink_message"]?.get("frm_payload")?.asText()
-                    ?: throw Exception("Missing frm_payload in message")
-            val fport = root["uplink_message"]?.get("f_port")?.asInt() ?: throw Exception("Missing f_port in the message")
-
-            // Frame counter LoRaWAN: TTN OMETTE il campo quando vale 0, quindi niente throw, default 0
-            val fCnt = root["uplink_message"]?.get("f_cnt")?.asInt() ?: 0
-
-            // val time = root["uplink_message"]?.get("settings")?.get("received_at")?.asText() ?: throw Exception("Missing time in the message")
-            val time =
-                root["uplink_message"]?.get("received_at")?.asText() ?: root["uplink_message"]?.get("settings")?.get("time")?.asText()
-                    ?: throw Exception("Missing time in the message")
-
-            val rssi: Int =
-                root["uplink_message"]
-                    ?.get("rx_metadata")
-                    ?.get(0)
-                    ?.get("rssi")
-                    ?.asInt() ?: throw Exception("Missing rssi in the message")
-
-            val devEui =
-                root["end_device_ids"]?.get("dev_eui")?.asText()
-                    ?: root["identifiers"]
-                        ?.get(0)
-                        ?.get("device_ids")
-                        ?.get("dev_eui")
-                        ?.asText()
-            // root.get("dev_eui")?.asText()
-            // println("This is the dev_eui: $devEui")
-
-            val uplink = root["uplink_message"] ?: throw Exception("Not an uplink message")
-
-
-            // Estrazione metadati radio (Settings)
-            val settings = uplink["settings"]
-            val dataRateModulation = settings?.get("data_rate")?.get("lora")
-
-            val sf = dataRateModulation?.get("spreading_factor")?.asInt() ?: 0
-            val bw = dataRateModulation?.get("bandwidth")?.asLong() ?: 0L
-            val airtime = uplink["consumed_airtime"]?.asText() ?: "0s"
-            //val payloadSize = getPayloadSize(frmPayload)
-            val dataRate = calculateDataRate(sf, bw)
-
-            val deviceIds = root["end_device_ids"]
-            val deviceId = deviceIds?.get("device_id")?.asText() ?: "UNKNOWN_DEVICE"
-
-
-            // beware that frmPayload is encoded
-            return TTNMessage(fport, frmPayload, deviceId ,if (devEui.isNullOrEmpty()) "NOT FOUND" else devEui,  time, rssi, sf, bw, dataRate, airtime, fCnt)
+        
+        val jsonBytes = try {
+            Base64.getDecoder().decode(trimmed)
         } catch (e: Exception) {
-            println("Error parsing message: $message")
-            e.printStackTrace()
-            throw e
+            log.error("[DECODE ERROR] Fallimento decodifica Base64 dell'intero messaggio Kafka")
+            throw IllegalArgumentException("Base64 wrapper invalido")
         }
+
+        val jsonStr = String(jsonBytes)
+        val root: JsonNode = try {
+            objectMapper.readTree(jsonStr)
+        } catch (e: Exception) {
+            log.error("[DECODE ERROR] Impossibile formattare il payload come JSON: {}", jsonStr)
+            throw IllegalArgumentException("JSON malformato")
+        }
+
+        val uplink = root["uplink_message"] 
+            ?: throw Exception("Campo 'uplink_message' assente nel JSON")
+
+        val frmPayload = uplink["frm_payload"]?.asText() 
+            ?: throw Exception("Campo 'frm_payload' assente in uplink_message")
+
+        val fport = uplink["f_port"]?.asInt() 
+            ?: throw Exception("Campo 'f_port' assente in uplink_message")
+
+        val fCnt = uplink["f_cnt"]?.asInt() ?: 0
+
+        val time = root["received_at"]?.asText()
+            ?: uplink["received_at"]?.asText()
+            ?: uplink["settings"]?.get("time")?.asText()
+            ?: run {
+                log.warn("[DECODE WARNING] Campo 'received_at'/'time' non trovato nel JSON. Uso il timestamp corrente.")
+                Instant.now().toString()
+            }
+
+        val rssi: Int = uplink["rx_metadata"]?.get(0)?.get("rssi")?.asInt() 
+            ?: run {
+                log.warn("[DECODE WARNING] Campo 'rssi' non presente in rx_metadata[0]. Default a -100")
+                -100
+            }
+
+        val devEui = root["end_device_ids"]?.get("dev_eui")?.asText()
+            ?: root["identifiers"]?.get(0)?.get("device_ids")?.get("dev_eui")?.asText()
+            ?: "NOT FOUND"
+
+        if (devEui == "NOT FOUND") {
+            log.warn("[DECODE WARNING] 'dev_eui' non trovato nell'oggetto JSON")
+        }
+
+        val settings = uplink["settings"]
+        val dataRateModulation = settings?.get("data_rate")?.get("lora")
+
+        val sf = dataRateModulation?.get("spreading_factor")?.asInt() ?: 0
+        val bw = dataRateModulation?.get("bandwidth")?.asLong() ?: 0L
+        val airtime = uplink["consumed_airtime"]?.asText() ?: "0s"
+        val dataRate = calculateDataRate(sf, bw)
+
+        val deviceIds = root["end_device_ids"]
+        val deviceId = deviceIds?.get("device_id")?.asText() ?: "UNKNOWN_DEVICE"
+
+        log.debug("[TTN PARSE SUCCESS] DeviceId={}, DevEUI={}, FPort={}, FrameCnt={}", deviceId, devEui, fport, fCnt)
+
+        return TTNMessage(fport, frmPayload, deviceId, devEui, time, rssi, sf, bw, dataRate, airtime, fCnt)
     }
 
-    private fun decodePayload1(
-        frmPayload: String,
-        devEUI: String,
-        time: String,
-        LoRarssi: Int,
-    ): String {
-        val bytes = Base64.getDecoder().decode(frmPayload)
+    private fun decodePayload1(frmPayload: String, devEUI: String, time: String, LoRarssi: Int): String {
+        val bytes = decodeBase64Payload(frmPayload, 1) ?: return ""
 
-        // Nuovo check: MUID(4) + RSSI(1) + Temp(2) = 7 byte
         if (bytes.size < 7) {
-            println("Payload too short: ${bytes.size} bytes")
+            log.warn("[FPORT 1 WARNING] Payload troppo corto: ricevuti {} byte, richiesti 7", bytes.size)
             return ""
         }
 
         val buffer = ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.BIG_ENDIAN)
-
-        // 1) MUID (4 byte) - Lo leggiamo come Int (Unsigned 32-bit nel buffer)
         val muid = buffer.int.toLong() and 0xFFFFFFFFL
-
-        // 2) RSSI (1 byte)
         val rssi = buffer.get().toInt()
 
-        // 3) Temperatura (2 byte) - Little Endian come prima
-        // Nota: buffer.int ha spostato la posizione a 4, buffer.get() a 5.
-        // La temperatura è ai byte 5 e 6 (0-indexed)
         val lsb = bytes[5].toInt() and 0xFF
         val msb = bytes[6].toInt() and 0xFF
-
-        // Ricostruzione Signed Int16 (Little Endian)
         val raw = (msb shl 8) or lsb
         val tempInt = if (raw and 0x8000 != 0) raw or -0x10000 else raw
         val temperature = tempInt.toDouble() / 100.0
 
-        // Mappatura del nodeId basata sul MUID invece che sul MAC
-        //val nodeId = if (muid == 1677721601L) 1L else 2L
-
-        println("MUID ricevuto: $muid | Temp: $temperature | RSSI: $rssi")
+        log.info("[FPORT 1 SUCCESS] MUID={} | Temp={}°C | RSSI={}", muid, temperature, rssi)
 
         val m = MeasureDecoded(
             value = temperature,
-            unit = "°C", // O decodeUnit(1) se preferisci
+            unit = "°C",
             nodeId = muid,
             time = time,
             rssi = rssi,
             devEUI = devEUI,
-            LoRarssi = LoRarssi,
+            LoRarssi = LoRarssi
         )
 
         return Json.encodeToString(m)
     }
 
-    private fun decodePayload3(frmPayload: String): String {
-        val bytes = Base64.getDecoder().decode(frmPayload)
-
-        // Usiamo LITTLE_ENDIAN perché il tuo sensore trasmette i byte meno significativi prima
-        val buffer = ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.BIG_ENDIAN)
-
-        // 1) CUID (4 byte - Little Endian)
-        // Usiamo toLong() e la maschera per evitare i numeri negativi (unsigned)
-        val cuid = if (bytes.size >= 4) (buffer.int.toLong() and 0xFFFFFFFFL) else 0L
-
-        // 2) MUID (4 byte - Little Endian)
-        val muidRaw = if (bytes.size >= 8) (buffer.int.toLong() and 0xFFFFFFFFL) else 0L
-
-        // 3) MODELMU
-        // Se il modello è il byte più significativo (MSB) del MUID:
-        // In Little Endian, dopo aver letto l'intero con buffer.int,
-        // il MSB è quello che era all'ultimo posto nel buffer (offset 7).
-        val model = (muidRaw shr 24) and 0xFFL
-
-        val registrationMap = mapOf(
-            "CUID" to cuid.toString(),
-            "MUID" to muidRaw.toString(),
-            "MODELMU" to model.toString()
-        )
-
-        println("REGISTRATION: CU=$cuid, MU=$muidRaw, MODEL=$model")
-
-        return objectMapper.writeValueAsString(registrationMap)
-    }
-
     private fun decodePayload10(frmPayload: String, devEUI: String, deviceId: String): String {
-        val bytes = Base64.getDecoder().decode(frmPayload)
+        val bytes = decodeBase64Payload(frmPayload, 10) ?: return ""
 
-        // Verifica lunghezza minima: Model(2) + Bat(1) + Ptx(1) +Status(2) = 6 byte
         if (bytes.size < 4) {
-            println("Payload fport 10 troppo corto: ${bytes.size} bytes")
+            log.warn("[FPORT 10 WARNING] Payload troppo corto: ricevuti {} byte, richiesti almeno 4", bytes.size)
             return ""
         }
 
         val buffer = ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.BIG_ENDIAN)
-
-        // Byte 0: Opcode (lo leggiamo ma non lo mettiamo nel DTO se non serve)
-
-
-        // Byte 1-2: CU Model (Short - 2 byte)
         val model = buffer.short.toInt() and 0xFFFF
-
-        // Byte 3: Battery (1 byte)
         val rawbattery = buffer.get().toInt() and 0xFF
-
         val isCharging = rawbattery == 255
-        
-        val battery = if ( isCharging) 100 else ((rawbattery.toDouble() / 254.0) * 100.0).toInt()
-
+        val battery = if (isCharging) 100 else ((rawbattery.toDouble() / 254.0) * 100.0).toInt()
         val ptx = buffer.get().toInt() and 0xFF
-
         val acPowered = rawbattery == 254
+        val statusRaw = if (buffer.remaining() >= 1) buffer.get().toInt() and 0xFF else 0
 
-        // Byte 4: Status ( 1 byte)
-        val statusRaw = buffer.get().toInt() and 0xFFFF
+        val devEuiLong = parseDevEuiToLong(devEUI)
 
-        // Creiamo il DTO per il MeasureManager
-        // Nota: devEUI viene convertito da stringa HEX (TTN) a Long
         val update = mapOf(
-            "devEui" to devEUI.toLong(16), // TTN manda HEX, noi vogliamo il Long
+            "devEui" to devEuiLong,
             "deviceId" to deviceId,
             "model" to model,
             "batteryLevel" to battery,
@@ -284,74 +235,76 @@ class TTNStream(
             "statusRaw" to statusRaw
         )
 
-        println("CU STATUS [FPort 10]: DevEUI=$devEUI, Model=$model, Bat=$battery%, isCharging=$isCharging, acPowered=$acPowered, Ptx=$ptx, Status=$statusRaw")
-
+        log.info("[FPORT 10 SUCCESS] DevEUI={} ({}), Model={}, Bat={}%", deviceId, devEuiLong, model, battery)
         return objectMapper.writeValueAsString(update)
     }
 
     private fun decodePayload16(frmPayload: String, devEUI: String, deviceId: String): String {
-        val bytes = Base64.getDecoder().decode(frmPayload)
+        val bytes = decodeBase64Payload(frmPayload, 16) ?: return ""
 
-        // Almeno Opcode(1) + 1 MU(5) = 6 byte
-        if (bytes.size < 4) return ""
-
-        val buffer = ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.BIG_ENDIAN)
-
-
-
-        val muList = mutableListOf<Map<String, Any>>()
-        var localIdIndex = 1;
-
-        // Ogni MU sono 4 byte. Continuiamo finché ci sono almeno 4 byte rimasti
-        while (buffer.remaining() >= 4) {
-            val extendedId = buffer.int
-            val localId = localIdIndex; //buffer.get().toInt() and 0xFF
-            localIdIndex++;
-
-            // Estrarre il modello dall'ExtendedID (come fatto in precedenza)
-            // Se il modello sono i primi 8 bit dell'ExtendedID:
-            val model = (extendedId shr 16) and 0xFFFF
-
-            muList.add(mapOf(
-                "extendedId" to extendedId,
-                "localId" to localId,
-                "model" to model
-            ))
+        if (bytes.size < 4) {
+            log.warn("[FPORT 16 WARNING] Payload troppo corto: ricevuti {} byte, richiesti almeno 4", bytes.size)
+            return ""
         }
 
+        val buffer = ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.BIG_ENDIAN)
+        val muList = mutableListOf<Map<String, Any>>()
+        var localIdIndex = 1
+
+        while (buffer.remaining() >= 4) {
+            val extendedId = buffer.int
+            val localId = localIdIndex++
+            val model = (extendedId ushr 16) and 0xFFFF
+
+            muList.add(
+                mapOf(
+                    "extendedId" to extendedId,
+                    "localId" to localId,
+                    "model" to model
+                )
+            )
+        }
+
+        val devEuiLong = parseDevEuiToLong(devEUI)
+
         val joinNotification = mapOf(
-            "devEui" to devEUI.toLong(16),
+            "devEui" to devEuiLong,
             "deviceId" to deviceId,
             "muList" to muList
         )
 
-        println("JOIN NOTIFICATION: CU=$devEUI, MU trovate=${muList.size}")
+        log.info("[FPORT 16 SUCCESS] DevEUI={} ({}), MU Trovate={}", deviceId, devEuiLong, muList.size)
         return objectMapper.writeValueAsString(joinNotification)
+    }
+
+    private fun decodeBase64Payload(frmPayload: String, fport: Int): ByteArray? {
+        return try {
+            Base64.getDecoder().decode(frmPayload)
+        } catch (e: Exception) {
+            log.error("[FPORT {} ERROR] frm_payload non e' un Base64 valido: '{}'", fport, frmPayload)
+            null
+        }
+    }
+
+    private fun parseDevEuiToLong(devEUI: String): Long {
+        return try {
+            java.lang.Long.parseUnsignedLong(devEUI.trim(), 16)
+        } catch (e: Exception) {
+            log.error("[ERROR] Impossibile convertire DevEUI Hex '{}' in Unsigned Long: {}", devEUI, e.message)
+            0L
+        }
     }
 
     private fun calculateDataRate(sf: Int, bw: Long): String {
         return when {
-            sf == 12 && bw == 125000L  -> "DR0"
-            sf == 11 && bw == 125000L  -> "DR1"
-            sf == 10 && bw == 125000L  -> "DR2"
-            sf == 9  && bw == 125000L  -> "DR3"
+            sf == 12 && bw == 125000L -> "DR0"
+            sf == 11 && bw == 125000L -> "DR1"
+            sf == 10 && bw == 125000L -> "DR2"
+            sf == 9  && bw == 125000L -> "DR3"
             sf == 8  && bw == 125000L -> "DR4"
             sf == 7  && bw == 125000L -> "DR5"
             sf == 7  && bw == 250000L -> "DR6"
             else -> "DR_INVALID_OR_OVERSIZE"
         }
-    }
-
-    private fun getPayloadSize(base64String: String): Int {
-        if (base64String.isEmpty()) return 0
-
-        val l = base64String.length
-        val padding = when {
-            base64String.endsWith("==") -> 2
-            base64String.endsWith("=") -> 1
-            else -> 0
-        }
-
-        return (l * 3 / 4) - padding
     }
 }
