@@ -217,9 +217,9 @@ class TTNStream(
         val model = buffer.short.toInt() and 0xFFFF
         val rawbattery = buffer.get().toInt() and 0xFF
         val isCharging = rawbattery == 255
-        val battery = if (isCharging) 100 else ((rawbattery.toDouble() / 254.0) * 100.0).toInt()
-        val ptx = buffer.get().toInt() and 0xFF
         val acPowered = rawbattery == 254
+        val battery = if ( isCharging || acPowered ) 100 else (rawbattery.toDouble()).toInt() //TODO da fare 100 +  in carica
+        val ptx = buffer.get().toInt() and 0xFF
         val statusRaw = if (buffer.remaining() >= 1) buffer.get().toInt() and 0xFF else 0
 
         val devEuiLong = parseDevEuiToLong(devEUI)
