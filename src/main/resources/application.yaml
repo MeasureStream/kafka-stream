@@ -20,6 +20,10 @@ spring:
 logging:
   level:
     root: INFO
-    it.polito.measurestream.kafka-stream: DEBUG
-    org.apache.kafka.streams: INFO
-    org.apache.kafka.clients.consumer: DEBUG
+    # Silenzia completamente la valanga di log interni dei client Kafka
+    org.apache.kafka: WARN
+    org.apache.kafka.clients: WARN
+    org.apache.kafka.streams: WARN
+
+    # Abilita i log di DEBUG/INFO solo per il tuo codice
+    it.polito.measurestream.kafkastream: DEBUG
