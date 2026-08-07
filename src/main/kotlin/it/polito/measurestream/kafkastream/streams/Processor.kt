@@ -88,6 +88,12 @@ class TTNStream(
                                           ttnMessage.devEUI,
                                           ttnMessage.deviceId
                                   )
+                          11 ->
+                                  decodePayload11(
+                                          ttnMessage.payload,
+                                          ttnMessage.devEUI,
+                                          ttnMessage.deviceId
+                                  )
                           16 ->
                                   decodePayload16(
                                           ttnMessage.payload,
@@ -146,6 +152,12 @@ class TTNStream(
                     { key, _ -> key == 10 },
                     Branched.withConsumer { ks ->
                       ks.to("cu-status", Produced.with(integerSerde, Serdes.String()))
+                    }
+            )
+            .branch(
+                    { key, _ -> key == 11 },
+                    Branched.withConsumer { ks ->
+                      ks.to("cu-status-version", Produced.with(integerSerde, Serdes.String()))
                     }
             )
             .branch(
@@ -345,6 +357,58 @@ class TTNStream(
             "[FPORT 10 SUCCESS] DevEUI={} ({}), Model={}, Bat={}%",
             deviceId,
             devEuiLong,
+            model,
+            battery
+    )
+    return objectMapper.writeValueAsString(update)
+  }
+
+  private fun decodePayload11(frmPayload: String, devEUI: String, deviceId: String): String {
+    val bytes = decodeBase64Payload(frmPayload, 10) ?: return ""
+
+    if (bytes.size < 4) {
+      log.warn(
+              "[FPORT 11 WARNING] Payload troppo corto: ricevuti {} byte, richiesti almeno 4",
+              bytes.size
+      )
+      return ""
+    }
+
+    val buffer = ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.BIG_ENDIAN)
+    val model = buffer.short.toInt() and 0xFFFF
+    val configVersion = buffer.get().toInt() and 0xFF
+    val templateVersion = buffer.get().toInt() and 0xFF
+    val rawbattery = buffer.get().toInt() and 0xFF
+    val isCharging = rawbattery == 255
+    val acPowered = rawbattery == 254
+    val battery =
+            if (isCharging || acPowered) 100
+            else (rawbattery.toDouble()).toInt() // TODO da fare 100 +  in carica
+    val ptx = buffer.get().toInt() and 0xFF
+    val statusRaw = if (buffer.remaining() >= 1) buffer.get().toInt() and 0xFF else 0
+
+    val devEuiLong = parseDevEuiToLong(devEUI)
+
+    val update =
+            mapOf(
+                    "devEui" to devEuiLong,
+                    "deviceId" to deviceId,
+                    "configVersion" to configVersion,
+                    "templateVersion" to templateVersion,
+                    "model" to model,
+                    "batteryLevel" to battery,
+                    "ptx" to ptx,
+                    "acPowered" to acPowered,
+                    "isCharging" to isCharging,
+                    "statusRaw" to statusRaw
+            )
+
+    log.info(
+            "[FPORT 11 SUCCESS] DevEUI={} ({}), configVersion={}, templateVersion={}, Model={}, Bat={}%",
+            deviceId,
+            devEuiLong,
+            configVersion,
+            templateVersion,
             model,
             battery
     )
