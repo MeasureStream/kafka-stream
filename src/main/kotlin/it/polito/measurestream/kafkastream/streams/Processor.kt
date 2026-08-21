@@ -104,7 +104,8 @@ class TTNStream(
                                   decodePayload33(
                                           ttnMessage.payload,
                                           ttnMessage.devEUI,
-                                          ttnMessage.deviceId
+                                          ttnMessage.deviceId,
+                                          ttnMessage.time
                                   )
                           else -> {
                             log.warn(
@@ -446,7 +447,12 @@ class TTNStream(
     return objectMapper.writeValueAsString(joinNotification)
   }
 
-  private fun decodePayload33(frmPayload: String, devEUI: String, deviceId: String): String {
+  private fun decodePayload33(
+          frmPayload: String,
+          devEUI: String,
+          deviceId: String,
+          timeISO: String
+  ): String {
     val bytes = decodeBase64Payload(frmPayload, 33) ?: return ""
 
     if (bytes.isEmpty()) {
@@ -470,6 +476,7 @@ class TTNStream(
                     "devEui" to devEuiLong,
                     "deviceId" to deviceId,
                     "configVersion" to configVersion,
+                    "timestamp" to timeISO,
                     // Jackson serializza automaticamente i ByteArray come stringa Base64
                     "rawPayload" to Base64.getEncoder().encodeToString(remainingBytes)
             )
