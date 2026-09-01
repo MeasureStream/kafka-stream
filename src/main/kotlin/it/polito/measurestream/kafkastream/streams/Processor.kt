@@ -107,6 +107,13 @@ class TTNStream(
                                           ttnMessage.deviceId,
                                           ttnMessage.time
                                   )
+                          49 ->
+                                  decodePayload49(
+                                          ttnMessage.payload,
+                                          ttnMessage.devEUI,
+                                          ttnMessage.deviceId,
+                                          ttnMessage.time
+                                  )
                           else -> {
                             log.warn(
                                     "[UNHANDLED FPORT] Nessun decoder registrato per f_port={}",
@@ -128,7 +135,6 @@ class TTNStream(
                     }
                     .filter { _, value -> value != null && value.isNotBlank() }
 
-    // Partizionamento sui topic Kafka
     processed
             .split()
             .branch(
@@ -169,11 +175,14 @@ class TTNStream(
             )
             .branch(
                     { key, _ -> key == 33 },
-                    Branched.withConsumer { ks -> // <-- NUOVO
-                      ks.to(
-                              "cu-measures",
-                              Produced.with(integerSerde, Serdes.String())
-                      ) // Modifica il nome del topic se necessario
+                    Branched.withConsumer { ks ->
+                      ks.to("cu-measures", Produced.with(integerSerde, Serdes.String()))
+                    }
+            )
+            .branch(
+                    { key, _ -> key == 49 },
+                    Branched.withConsumer { ks ->
+                      ks.to("cu-measures-extra", Produced.with(integerSerde, Serdes.String()))
                     }
             )
             .defaultBranch(
@@ -462,10 +471,8 @@ class TTNStream(
 
     val buffer = ByteBuffer.wrap(bytes)
 
-    // Legge il primo byte come intero unsigned (0-255)
     val configVersion = buffer.get().toInt() and 0xFF
 
-    // Estrae i byte rimanenti (se presenti)
     val remainingBytes = ByteArray(buffer.remaining())
     buffer.get(remainingBytes)
 
@@ -477,12 +484,51 @@ class TTNStream(
                     "deviceId" to deviceId,
                     "configVersion" to configVersion,
                     "timestamp" to timeISO,
-                    // Jackson serializza automaticamente i ByteArray come stringa Base64
                     "rawPayload" to Base64.getEncoder().encodeToString(remainingBytes)
             )
 
     log.info(
             "[FPORT 33 SUCCESS] DevEUI={} ({}), ConfigVersion={}",
+            deviceId,
+            devEuiLong,
+            configVersion
+    )
+    return objectMapper.writeValueAsString(configNotification)
+  }
+
+  private fun decodePayload49(
+          frmPayload: String,
+          devEUI: String,
+          deviceId: String,
+          timeISO: String
+  ): String {
+    val bytes = decodeBase64Payload(frmPayload, 49) ?: return ""
+
+    if (bytes.isEmpty()) {
+      log.warn("[FPORT 49 WARNING] Payload vuoto per DevEUI={}", devEUI)
+      return ""
+    }
+
+    val buffer = ByteBuffer.wrap(bytes)
+
+    val configVersion = buffer.get().toInt() and 0xFF
+
+    val remainingBytes = ByteArray(buffer.remaining())
+    buffer.get(remainingBytes)
+
+    val devEuiLong = parseDevEuiToLong(devEUI)
+
+    val configNotification =
+            mapOf(
+                    "devEui" to devEuiLong,
+                    "deviceId" to deviceId,
+                    "configVersion" to configVersion,
+                    "timestamp" to timeISO,
+                    "rawPayload" to Base64.getEncoder().encodeToString(remainingBytes)
+            )
+
+    log.info(
+            "[FPORT 49 SUCCESS] DevEUI={} ({}), ConfigVersion={}",
             deviceId,
             devEuiLong,
             configVersion
