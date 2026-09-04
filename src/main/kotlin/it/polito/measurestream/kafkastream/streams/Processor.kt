@@ -58,6 +58,7 @@ class TTNStream(
                               "devEUI" to ttnMessage.devEUI,
                               "deviceId" to ttnMessage.deviceId,
                               "rssi" to ttnMessage.LoRarssi,
+                              "snr" to ttnMessage.snr,
                               "dataRate" to ttnMessage.dataRate,
                               "airtime" to ttnMessage.consumedAirtime,
                               "time" to ttnMessage.time,
@@ -236,8 +237,10 @@ class TTNStream(
                       Instant.now().toString()
                     }
 
+    val rxMetadata = uplink["rx_metadata"]?.get(0)
+
     val rssi: Int =
-            uplink["rx_metadata"]?.get(0)?.get("rssi")?.asInt()
+            rxMetadata?.get("rssi")?.asInt()
                     ?: run {
                       log.warn(
                               "[DECODE WARNING] Campo 'rssi' non presente in rx_metadata[0]. Default a -100"
@@ -245,6 +248,14 @@ class TTNStream(
                       -100
                     }
 
+    val snr: Double =
+            rxMetadata?.get("snr")?.asDouble()
+                    ?: run {
+                      log.warn(
+                              "[DECODE WARNING] Campo 'snr' non presente in rx_metadata[0]. Default a 0.0"
+                      )
+                      0.0
+                    }
     val devEui =
             root["end_device_ids"]?.get("dev_eui")?.asText()
                     ?: root["identifiers"]?.get(0)?.get("device_ids")?.get("dev_eui")?.asText()
@@ -274,17 +285,18 @@ class TTNStream(
     )
 
     return TTNMessage(
-            fport,
-            frmPayload,
-            deviceId,
-            devEui,
-            time,
-            rssi,
-            sf,
-            bw,
-            dataRate,
-            airtime,
-            fCnt
+            fport = fport,
+            payload = frmPayload,
+            deviceId = deviceId,
+            devEUI = devEui,
+            time = time,
+            LoRarssi = rssi,
+            snr = snr,
+            spreadingFactor = sf,
+            bandwidth = bw,
+            dataRate = dataRate,
+            consumedAirtime = airtime,
+            fCnt = fCnt
     )
   }
 
