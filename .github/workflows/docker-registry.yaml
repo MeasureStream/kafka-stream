@@ -2,7 +2,7 @@ name: Build Spring Boot and Create Multi-Arch Docker Image
 
 on:
   push:
-    branches: [main]
+    branches: [main, fix/misure-perse]
 
 jobs:
   build:
@@ -40,6 +40,6 @@ jobs:
           context: .
           push: true
           tags: |
-            christiand9699/kafkastream:latest
-            christiand9699/kafkastream:${{ steps.version.outputs.VERSION }}
+            ${{ github.ref_name == 'main' && format('christiand9699/kafkastream:latest,christiand9699/kafkastream:{0}', steps.version.outputs.VERSION) || '' }}
+            ${{ github.ref_name == 'fix/misure-perse' && 'christiand9699/kafkastream:misure-perse' || '' }}
           platforms: linux/amd64,linux/arm64

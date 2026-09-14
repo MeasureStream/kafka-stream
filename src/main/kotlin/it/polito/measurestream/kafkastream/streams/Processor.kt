@@ -2,13 +2,10 @@ package it.polito.measurestream.kafkastream.streams
 
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
-import it.polito.measurestream.kafkastream.dto.MeasureDecoded
 import it.polito.measurestream.kafkastream.dto.TTNMessage
 import java.nio.ByteBuffer
 import java.time.Instant
 import java.util.Base64
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
 import org.apache.kafka.common.serialization.Serde
 import org.apache.kafka.common.serialization.Serdes
 import org.apache.kafka.streams.KeyValue
@@ -20,35 +17,38 @@ import org.apache.kafka.streams.kstream.Produced
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 
+/** Payload decodificato insieme alla FPort da cui arriva, per instradarlo sul topic giusto. */
+data class DecodedUplink(val fport: Int, val payload: String)
+
 @Component
 class TTNStream(
         private val objectMapper: ObjectMapper,
-        private val integerSerde: Serde<Int>,
         private val stringSerde: Serde<String>,
 ) {
   private val log = LoggerFactory.getLogger(TTNStream::class.java)
 
-  fun ttnUplinkProcessor(builder: StreamsBuilder): KStream<Int, String> {
+  fun ttnUplinkProcessor(builder: StreamsBuilder): KStream<String, DecodedUplink> {
     val input: KStream<ByteArray, String> =
             builder.stream("ttn-uplink", Consumed.with(Serdes.ByteArray(), Serdes.String()))
 
-    val decodedStream =
-            input
-                    .map { _, message ->
-                      try {
-                        val ttnMessage = decodeMessage(message)
-                        KeyValue(ttnMessage.fport, ttnMessage)
-                      } catch (e: Exception) {
-                        log.error(
-                                "[STREAM PARSE ERROR] Impossibile decodificare il messaggio TTN grezzo: {}",
-                                e.message
-                        )
-                        log.debug("[RAW PAYLOAD FAILED]: {}", message)
-                        null
-                      }
-                    }
-                    .filter { _, v -> v != null }
-                    .mapValues { _, v -> v!! }
+    // Chiave = DevEUI: tutti i messaggi di una CU finiscono sulla stessa partizione e restano
+    // in ordine, quindi una notifica MU è sempre elaborata prima del report che la segue.
+    // flatMap e non map: un messaggio illeggibile viene scartato, invece di produrre un
+    // KeyValue null che fermerebbe il thread dello stream.
+    val decodedStream: KStream<String, TTNMessage> =
+            input.flatMap<String, TTNMessage> { _, message ->
+              try {
+                val ttnMessage = decodeMessage(message)
+                listOf(KeyValue(ttnMessage.devEUI, ttnMessage))
+              } catch (e: Exception) {
+                log.error(
+                        "[STREAM PARSE ERROR] Impossibile decodificare il messaggio TTN grezzo: {}",
+                        e.message
+                )
+                log.debug("[RAW PAYLOAD FAILED]: {}", message)
+                emptyList<KeyValue<String, TTNMessage>>()
+              }
+            }
 
     // Pipeline per la qualità del segnale
     decodedStream
@@ -68,132 +68,74 @@ class TTNStream(
                       )
               objectMapper.writeValueAsString(signalInfo)
             }
-            .to("ttn-uplink-signal-quality", Produced.with(integerSerde, Serdes.String()))
+            .to("ttn-uplink-signal-quality", Produced.with(stringSerde, Serdes.String()))
 
-    // Pipeline per la decodifica specifica per FPort
-    val processed: KStream<Int, String> =
+    // Pipeline per la decodifica specifica per FPort: la FPort viaggia nel valore,
+    // perché la chiave ora è il DevEUI
+    val processed: KStream<String, DecodedUplink> =
             decodedStream
-                    .mapValues { ttnMessage ->
-                      try {
-                        when (ttnMessage.fport) {
-                          1 ->
-                                  decodePayload1(
-                                          ttnMessage.payload,
-                                          ttnMessage.devEUI,
-                                          ttnMessage.time,
-                                          ttnMessage.LoRarssi
-                                  )
-                          10 ->
-                                  decodePayload10(
-                                          ttnMessage.payload,
-                                          ttnMessage.devEUI,
-                                          ttnMessage.deviceId
-                                  )
-                          11 ->
-                                  decodePayload11(
-                                          ttnMessage.payload,
-                                          ttnMessage.devEUI,
-                                          ttnMessage.deviceId
-                                  )
-                          16 ->
-                                  decodePayload16(
-                                          ttnMessage.payload,
-                                          ttnMessage.devEUI,
-                                          ttnMessage.deviceId
-                                  )
-                          33 ->
-                                  decodePayload33(
-                                          ttnMessage.payload,
-                                          ttnMessage.devEUI,
-                                          ttnMessage.deviceId,
-                                          ttnMessage.time
-                                  )
-                          49 ->
-                                  decodePayload49(
-                                          ttnMessage.payload,
-                                          ttnMessage.devEUI,
-                                          ttnMessage.deviceId,
-                                          ttnMessage.time
-                                  )
-                          else -> {
-                            log.warn(
-                                    "[UNHANDLED FPORT] Nessun decoder registrato per f_port={}",
-                                    ttnMessage.fport
-                            )
-                            ttnMessage.payload
-                          }
-                        }
-                      } catch (e: Exception) {
-                        log.error(
-                                "[DECODER ERROR] Fallita decodifica payload per f_port={} DevEUI={}: {}",
-                                ttnMessage.fport,
-                                ttnMessage.devEUI,
-                                e.message,
-                                e
-                        )
-                        ""
-                      }
-                    }
-                    .filter { _, value -> value != null && value.isNotBlank() }
+                    .mapValues { ttnMessage -> DecodedUplink(ttnMessage.fport, decodeByFPort(ttnMessage)) }
+                    .filter { _, value -> value.payload.isNotBlank() }
 
     processed
             .split()
-            .branch(
-                    { key, _ -> key == 1 },
-                    Branched.withConsumer { ks ->
-                      ks.to("ttn-uplink-measure", Produced.with(integerSerde, Serdes.String()))
-                    }
-            )
-            .branch(
-                    { key, _ -> key == 2 },
-                    Branched.withConsumer { ks ->
-                      ks.to("ttn-uplink-command", Produced.with(integerSerde, Serdes.String()))
-                    }
-            )
-            .branch(
-                    { key, _ -> key == 3 },
-                    Branched.withConsumer { ks ->
-                      ks.to("mu-registration", Produced.with(integerSerde, Serdes.String()))
-                    }
-            )
-            .branch(
-                    { key, _ -> key == 10 },
-                    Branched.withConsumer { ks ->
-                      ks.to("cu-status", Produced.with(integerSerde, Serdes.String()))
-                    }
-            )
-            .branch(
-                    { key, _ -> key == 11 },
-                    Branched.withConsumer { ks ->
-                      ks.to("cu-status-version", Produced.with(integerSerde, Serdes.String()))
-                    }
-            )
-            .branch(
-                    { key, _ -> key == 16 },
-                    Branched.withConsumer { ks ->
-                      ks.to("cu-join-notification", Produced.with(integerSerde, Serdes.String()))
-                    }
-            )
-            .branch(
-                    { key, _ -> key == 33 },
-                    Branched.withConsumer { ks ->
-                      ks.to("cu-measures", Produced.with(integerSerde, Serdes.String()))
-                    }
-            )
-            .branch(
-                    { key, _ -> key == 49 },
-                    Branched.withConsumer { ks ->
-                      ks.to("cu-measures-extra", Produced.with(integerSerde, Serdes.String()))
-                    }
-            )
-            .defaultBranch(
-                    Branched.withConsumer { ks ->
-                      ks.to("ttn-uplink-error", Produced.with(integerSerde, Serdes.String()))
-                    }
-            )
+            // La FPort 1 (misura singola verso measure-manager, dismesso) non ha più un topic:
+            // eventuali messaggi finiscono in ttn-uplink-error.
+            .branch({ _, v -> v.fport == 2 }, Branched.withConsumer { ks -> ks.toTopic("ttn-uplink-command") })
+            .branch({ _, v -> v.fport == 3 }, Branched.withConsumer { ks -> ks.toTopic("mu-registration") })
+            .branch({ _, v -> v.fport == 10 }, Branched.withConsumer { ks -> ks.toTopic("cu-status") })
+            .branch({ _, v -> v.fport == 11 }, Branched.withConsumer { ks -> ks.toTopic("cu-status-version") })
+            .branch({ _, v -> v.fport == 16 }, Branched.withConsumer { ks -> ks.toTopic("cu-join-notification") })
+            .branch({ _, v -> v.fport == 33 }, Branched.withConsumer { ks -> ks.toTopic("cu-measures") })
+            .branch({ _, v -> v.fport == 49 }, Branched.withConsumer { ks -> ks.toTopic("cu-measures-extra") })
+            .defaultBranch(Branched.withConsumer { ks -> ks.toTopic("ttn-uplink-error") })
 
     return processed
   }
+
+  /** Scrive sul topic il solo payload, con chiave DevEUI. */
+  private fun KStream<String, DecodedUplink>.toTopic(topic: String) =
+          mapValues { value -> value.payload }.to(topic, Produced.with(stringSerde, Serdes.String()))
+
+  /** Decodifica il payload secondo la FPort; stringa vuota se la decodifica fallisce. */
+  private fun decodeByFPort(ttnMessage: TTNMessage): String =
+          try {
+            when (ttnMessage.fport) {
+              10 -> decodePayload10(ttnMessage.payload, ttnMessage.devEUI, ttnMessage.deviceId)
+              11 -> decodePayload11(ttnMessage.payload, ttnMessage.devEUI, ttnMessage.deviceId)
+              16 -> decodePayload16(ttnMessage.payload, ttnMessage.devEUI, ttnMessage.deviceId)
+              33 ->
+                      decodePayload33(
+                              ttnMessage.payload,
+                              ttnMessage.devEUI,
+                              ttnMessage.deviceId,
+                              ttnMessage.time
+                      )
+              49 ->
+                      decodePayload49(
+                              ttnMessage.payload,
+                              ttnMessage.devEUI,
+                              ttnMessage.deviceId,
+                              ttnMessage.time
+                      )
+              else -> {
+                log.warn(
+                        "[UNHANDLED FPORT] Nessun decoder registrato per f_port={}",
+                        ttnMessage.fport
+                )
+                ttnMessage.payload
+              }
+            }
+          } catch (e: Exception) {
+            log.error(
+                    "[DECODER ERROR] Fallita decodifica payload per f_port={} DevEUI={}: {}",
+                    ttnMessage.fport,
+                    ttnMessage.devEUI,
+                    e.message,
+                    e
+            )
+            ""
+          }
 
   private fun decodeMessage(message: String): TTNMessage {
     val trimmed = message.trim().removeSurrounding("\"")
@@ -298,45 +240,6 @@ class TTNStream(
             consumedAirtime = airtime,
             fCnt = fCnt
     )
-  }
-
-  private fun decodePayload1(
-          frmPayload: String,
-          devEUI: String,
-          time: String,
-          LoRarssi: Int
-  ): String {
-    val bytes = decodeBase64Payload(frmPayload, 1) ?: return ""
-
-    if (bytes.size < 7) {
-      log.warn("[FPORT 1 WARNING] Payload troppo corto: ricevuti {} byte, richiesti 7", bytes.size)
-      return ""
-    }
-
-    val buffer = ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.BIG_ENDIAN)
-    val muid = buffer.int.toLong() and 0xFFFFFFFFL
-    val rssi = buffer.get().toInt()
-
-    val lsb = bytes[5].toInt() and 0xFF
-    val msb = bytes[6].toInt() and 0xFF
-    val raw = (msb shl 8) or lsb
-    val tempInt = if (raw and 0x8000 != 0) raw or -0x10000 else raw
-    val temperature = tempInt.toDouble() / 100.0
-
-    log.info("[FPORT 1 SUCCESS] MUID={} | Temp={}°C | RSSI={}", muid, temperature, rssi)
-
-    val m =
-            MeasureDecoded(
-                    value = temperature,
-                    unit = "°C",
-                    nodeId = muid,
-                    time = time,
-                    rssi = rssi,
-                    devEUI = devEUI,
-                    LoRarssi = LoRarssi
-            )
-
-    return Json.encodeToString(m)
   }
 
   private fun decodePayload10(frmPayload: String, devEUI: String, deviceId: String): String {
