@@ -1,5 +1,6 @@
 package it.polito.measurestream.kafkastream.configurations
 
+import com.fasterxml.jackson.annotation.JsonAlias
 import com.fasterxml.jackson.annotation.JsonProperty
 
 data class CUConfigCommandDTO(
@@ -24,7 +25,9 @@ data class DownlinkPayload(
 data class DownlinkRequestDTO(
     val deviceId: String,
     val rawPayload: ByteArray, // Byte grezzi, non ancora Base64
-    val fport: Int = 15,
+    // sensor-manager invia "fport" in modo esplicito; l'alias accetta anche "fPort",
+    // cioè i messaggi prodotti prima di quella modifica o durante un deploy non simultaneo.
+    @JsonProperty("fport") @JsonAlias("fPort") val fport: Int = 15,
     val priority: String = "NORMAL",
     val confirmed: Boolean = false
 )
