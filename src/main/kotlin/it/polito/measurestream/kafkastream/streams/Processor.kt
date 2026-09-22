@@ -88,6 +88,10 @@ class TTNStream(
             .branch({ _, v -> v.fport == 16 }, Branched.withConsumer { ks -> ks.toTopic("cu-join-notification") })
             .branch({ _, v -> v.fport == 33 }, Branched.withConsumer { ks -> ks.toTopic("cu-measures") })
             .branch({ _, v -> v.fport == 49 }, Branched.withConsumer { ks -> ks.toTopic("cu-measures-extra") })
+            // Allarmi 0xA0 ed eventi 0xA2: qui si fa solo trasporto, la lettura dei byte sta
+            // in sensor-manager, che e' l'unico che conosce i template.
+            .branch({ _, v -> v.fport == 160 }, Branched.withConsumer { ks -> ks.toTopic("cu-alarms") })
+            .branch({ _, v -> v.fport == 162 }, Branched.withConsumer { ks -> ks.toTopic("cu-events") })
             .defaultBranch(Branched.withConsumer { ks -> ks.toTopic("ttn-uplink-error") })
 
     return processed
@@ -117,6 +121,14 @@ class TTNStream(
                               ttnMessage.devEUI,
                               ttnMessage.deviceId,
                               ttnMessage.time
+                      )
+              160, 162 ->
+                      envelope(
+                              ttnMessage.payload,
+                              ttnMessage.devEUI,
+                              ttnMessage.deviceId,
+                              ttnMessage.time,
+                              ttnMessage.fport
                       )
               else -> {
                 log.warn(
@@ -369,6 +381,32 @@ class TTNStream(
 
     log.info("[FPORT 16 SUCCESS] DevEUI={} ({}), MU Trovate={}", deviceId, devEuiLong, muList.size)
     return objectMapper.writeValueAsString(joinNotification)
+  }
+
+  /**
+   * Busta per le porte che sensor-manager decodifica da solo: il payload resta com'e',
+   * accompagnato da chi l'ha mandato e da quando. Qui non si interpreta un byte, perche'
+   * i testi degli allarmi e i codici evento dei costruttori vivono nei template, e i
+   * template stanno nel registro di sensor-manager.
+   */
+  private fun envelope(
+          frmPayload: String,
+          devEUI: String,
+          deviceId: String,
+          timeISO: String,
+          fport: Int
+  ): String {
+    val devEuiLong = parseDevEuiToLong(devEUI)
+    val message =
+            mapOf(
+                    "devEui" to devEuiLong,
+                    "deviceId" to deviceId,
+                    "fport" to fport,
+                    "timestamp" to timeISO,
+                    "rawPayload" to frmPayload
+            )
+    log.info("[FPORT {}] DevEUI={} ({}): inoltrato a sensor-manager", fport, deviceId, devEuiLong)
+    return objectMapper.writeValueAsString(message)
   }
 
   private fun decodePayload33(
