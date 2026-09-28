@@ -3,23 +3,33 @@ package it.polito.measurestream.kafkastream.streams
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import it.polito.measurestream.kafkastream.dto.TTNMessage
-import java.nio.ByteBuffer
 import java.time.Instant
 import java.util.Base64
 import org.apache.kafka.common.serialization.Serde
 import org.apache.kafka.common.serialization.Serdes
 import org.apache.kafka.streams.KeyValue
 import org.apache.kafka.streams.StreamsBuilder
-import org.apache.kafka.streams.kstream.Branched
 import org.apache.kafka.streams.kstream.Consumed
 import org.apache.kafka.streams.kstream.KStream
 import org.apache.kafka.streams.kstream.Produced
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 
-/** Payload decodificato insieme alla FPort da cui arriva, per instradarlo sul topic giusto. */
-data class DecodedUplink(val fport: Int, val payload: String)
-
+/**
+ * Da TTN a una busta normalizzata: **qui non si interpreta nessun payload**.
+ *
+ * Questo servizio fa una cosa sola: toglie il messaggio dalla busta JSON di TTN, ne ricava
+ * chi l'ha mandato, su quale porta e quando, e lo rimette in coda con i byte intatti. Cosa
+ * significhino quei byte lo sa solo sensor-manager, perche' per saperlo servono i template, la
+ * topologia della CU e l'istantanea della configurazione attiva: tre cose che stanno li' e che
+ * li' si aggiornano nella stessa transazione.
+ *
+ * Il guadagno non e' estetico. Prima ogni porta aveva il suo decoder qui e il suo topic, e un
+ * formato nuovo richiedeva di rilasciare due servizi insieme; inoltre la chiave dei messaggi
+ * era la porta, quindi la notifica di una MU e il report che la seguiva potevano finire su
+ * partizioni diverse e arrivare in ordine invertito. Con la chiave DevEUI, tutto cio' che una
+ * CU manda resta in fila.
+ */
 @Component
 class TTNStream(
         private val objectMapper: ObjectMapper,
@@ -27,12 +37,12 @@ class TTNStream(
 ) {
   private val log = LoggerFactory.getLogger(TTNStream::class.java)
 
-  fun ttnUplinkProcessor(builder: StreamsBuilder): KStream<String, DecodedUplink> {
+  fun ttnUplinkProcessor(builder: StreamsBuilder): KStream<String, String> {
     val input: KStream<ByteArray, String> =
             builder.stream("ttn-uplink", Consumed.with(Serdes.ByteArray(), Serdes.String()))
 
     // Chiave = DevEUI: tutti i messaggi di una CU finiscono sulla stessa partizione e restano
-    // in ordine, quindi una notifica MU è sempre elaborata prima del report che la segue.
+    // in ordine, quindi una notifica MU e' sempre elaborata prima del report che la segue.
     // flatMap e non map: un messaggio illeggibile viene scartato, invece di produrre un
     // KeyValue null che fermerebbe il thread dello stream.
     val decodedStream: KStream<String, TTNMessage> =
@@ -50,7 +60,8 @@ class TTNStream(
               }
             }
 
-    // Pipeline per la qualità del segnale
+    // Qualita' del segnale: sono metadati della rete, non un payload, e restano su un topic
+    // proprio perche' riguardano ogni messaggio qualunque sia la porta.
     decodedStream
             .mapValues { ttnMessage ->
               val signalInfo =
@@ -70,72 +81,39 @@ class TTNStream(
             }
             .to("ttn-uplink-signal-quality", Produced.with(stringSerde, Serdes.String()))
 
-    // Pipeline per la decodifica specifica per FPort: la FPort viaggia nel valore,
-    // perché la chiave ora è il DevEUI
-    val processed: KStream<String, DecodedUplink> =
-            decodedStream
-                    .mapValues { ttnMessage -> DecodedUplink(ttnMessage.fport, decodeByFPort(ttnMessage)) }
-                    .filter { _, value -> value.payload.isNotBlank() }
+    // Un topic solo per tutte le porte: la porta viaggia dentro la busta, non nel nome del
+    // topic. Una porta nuova non richiede piu' di toccare questo servizio.
+    val uplinks: KStream<String, String> = decodedStream.mapValues { it -> envelope(it) }
+    uplinks.to("lora-uplink", Produced.with(stringSerde, Serdes.String()))
 
-    processed
-            .split()
-            // La FPort 1 (misura singola verso measure-manager, dismesso) non ha più un topic:
-            // eventuali messaggi finiscono in ttn-uplink-error.
-            .branch({ _, v -> v.fport == 2 }, Branched.withConsumer { ks -> ks.toTopic("ttn-uplink-command") })
-            .branch({ _, v -> v.fport == 3 }, Branched.withConsumer { ks -> ks.toTopic("mu-registration") })
-            .branch({ _, v -> v.fport == 10 }, Branched.withConsumer { ks -> ks.toTopic("cu-status") })
-            .branch({ _, v -> v.fport == 11 }, Branched.withConsumer { ks -> ks.toTopic("cu-status-version") })
-            .branch({ _, v -> v.fport == 16 }, Branched.withConsumer { ks -> ks.toTopic("cu-join-notification") })
-            .branch({ _, v -> v.fport == 33 }, Branched.withConsumer { ks -> ks.toTopic("cu-measures") })
-            .branch({ _, v -> v.fport == 49 }, Branched.withConsumer { ks -> ks.toTopic("cu-measures-extra") })
-            .defaultBranch(Branched.withConsumer { ks -> ks.toTopic("ttn-uplink-error") })
-
-    return processed
+    return uplinks
   }
 
-  /** Scrive sul topic il solo payload, con chiave DevEUI. */
-  private fun KStream<String, DecodedUplink>.toTopic(topic: String) =
-          mapValues { value -> value.payload }.to(topic, Produced.with(stringSerde, Serdes.String()))
-
-  /** Decodifica il payload secondo la FPort; stringa vuota se la decodifica fallisce. */
-  private fun decodeByFPort(ttnMessage: TTNMessage): String =
-          try {
-            when (ttnMessage.fport) {
-              10 -> decodePayload10(ttnMessage.payload, ttnMessage.devEUI, ttnMessage.deviceId)
-              11 -> decodePayload11(ttnMessage.payload, ttnMessage.devEUI, ttnMessage.deviceId)
-              16 -> decodePayload16(ttnMessage.payload, ttnMessage.devEUI, ttnMessage.deviceId)
-              33 ->
-                      decodePayload33(
-                              ttnMessage.payload,
-                              ttnMessage.devEUI,
-                              ttnMessage.deviceId,
-                              ttnMessage.time
-                      )
-              49 ->
-                      decodePayload49(
-                              ttnMessage.payload,
-                              ttnMessage.devEUI,
-                              ttnMessage.deviceId,
-                              ttnMessage.time
-                      )
-              else -> {
-                log.warn(
-                        "[UNHANDLED FPORT] Nessun decoder registrato per f_port={}",
-                        ttnMessage.fport
-                )
-                ttnMessage.payload
-              }
-            }
-          } catch (e: Exception) {
-            log.error(
-                    "[DECODER ERROR] Fallita decodifica payload per f_port={} DevEUI={}: {}",
-                    ttnMessage.fport,
-                    ttnMessage.devEUI,
-                    e.message,
-                    e
+  /**
+   * La busta: chi, quando, su quale porta, e i byte esattamente come sono arrivati. Il
+   * payload resta in base64 e non viene toccato: qualunque tentativo di interpretarlo qui
+   * sarebbe una seconda verita' accanto a quella dei template.
+   */
+  private fun envelope(message: TTNMessage): String {
+    val devEuiLong = parseDevEuiToLong(message.devEUI)
+    val body =
+            mapOf(
+                    "devEui" to devEuiLong,
+                    "deviceId" to message.deviceId,
+                    "fport" to message.fport,
+                    "timestamp" to message.time,
+                    "rawPayload" to message.payload,
+                    "fCnt" to message.fCnt,
             )
-            ""
-          }
+    log.info(
+            "[FPORT 0x{}] DevEUI={} ({}) f_cnt={}: inoltrato a sensor-manager",
+            "%02X".format(message.fport),
+            message.deviceId,
+            devEuiLong,
+            message.fCnt,
+    )
+    return objectMapper.writeValueAsString(body)
+  }
 
   private fun decodeMessage(message: String): TTNMessage {
     val trimmed = message.trim().removeSurrounding("\"")
@@ -240,224 +218,6 @@ class TTNStream(
             consumedAirtime = airtime,
             fCnt = fCnt
     )
-  }
-
-  private fun decodePayload10(frmPayload: String, devEUI: String, deviceId: String): String {
-    val bytes = decodeBase64Payload(frmPayload, 10) ?: return ""
-
-    if (bytes.size < 4) {
-      log.warn(
-              "[FPORT 10 WARNING] Payload troppo corto: ricevuti {} byte, richiesti almeno 4",
-              bytes.size
-      )
-      return ""
-    }
-
-    val buffer = ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.BIG_ENDIAN)
-    val model = buffer.short.toInt() and 0xFFFF
-    val rawbattery = buffer.get().toInt() and 0xFF
-    val isCharging = rawbattery == 255
-    val acPowered = rawbattery == 254
-    val battery =
-            if (isCharging || acPowered) 100
-            else (rawbattery.toDouble()).toInt() // TODO da fare 100 +  in carica
-    val ptx = buffer.get().toInt() and 0xFF
-    val statusRaw = if (buffer.remaining() >= 1) buffer.get().toInt() and 0xFF else 0
-
-    val devEuiLong = parseDevEuiToLong(devEUI)
-
-    val update =
-            mapOf(
-                    "devEui" to devEuiLong,
-                    "deviceId" to deviceId,
-                    "model" to model,
-                    "batteryLevel" to battery,
-                    "ptx" to ptx,
-                    "acPowered" to acPowered,
-                    "isCharging" to isCharging,
-                    "statusRaw" to statusRaw
-            )
-
-    log.info(
-            "[FPORT 10 SUCCESS] DevEUI={} ({}), Model={}, Bat={}%",
-            deviceId,
-            devEuiLong,
-            model,
-            battery
-    )
-    return objectMapper.writeValueAsString(update)
-  }
-
-  private fun decodePayload11(frmPayload: String, devEUI: String, deviceId: String): String {
-    val bytes = decodeBase64Payload(frmPayload, 10) ?: return ""
-
-    if (bytes.size < 4) {
-      log.warn(
-              "[FPORT 11 WARNING] Payload troppo corto: ricevuti {} byte, richiesti almeno 4",
-              bytes.size
-      )
-      return ""
-    }
-
-    val buffer = ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.BIG_ENDIAN)
-    val model = buffer.short.toInt() and 0xFFFF
-    val configVersion = buffer.get().toInt() and 0xFF
-    val templateVersion = buffer.get().toInt() and 0xFF
-    val rawbattery = buffer.get().toInt() and 0xFF
-    val isCharging = rawbattery == 255
-    val acPowered = rawbattery == 254
-    val battery =
-            if (isCharging || acPowered) 100
-            else (rawbattery.toDouble()).toInt() // TODO da fare 100 +  in carica
-    val ptx = buffer.get().toInt() and 0xFF
-    val statusRaw = if (buffer.remaining() >= 1) buffer.get().toInt() and 0xFF else 0
-
-    val devEuiLong = parseDevEuiToLong(devEUI)
-
-    val update =
-            mapOf(
-                    "devEui" to devEuiLong,
-                    "deviceId" to deviceId,
-                    "configVersion" to configVersion,
-                    "templateVersion" to templateVersion,
-                    "model" to model,
-                    "batteryLevel" to battery,
-                    "ptx" to ptx,
-                    "acPowered" to acPowered,
-                    "isCharging" to isCharging,
-                    "statusRaw" to statusRaw
-            )
-
-    log.info(
-            "[FPORT 11 SUCCESS] DevEUI={} ({}), configVersion={}, templateVersion={}, Model={}, Bat={}%",
-            deviceId,
-            devEuiLong,
-            configVersion,
-            templateVersion,
-            model,
-            battery
-    )
-    return objectMapper.writeValueAsString(update)
-  }
-
-  private fun decodePayload16(frmPayload: String, devEUI: String, deviceId: String): String {
-    val bytes = decodeBase64Payload(frmPayload, 16) ?: return ""
-
-    if (bytes.size < 4) {
-      log.warn(
-              "[FPORT 16 WARNING] Payload troppo corto: ricevuti {} byte, richiesti almeno 4",
-              bytes.size
-      )
-      return ""
-    }
-
-    val buffer = ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.BIG_ENDIAN)
-    val muList = mutableListOf<Map<String, Any>>()
-    var localIdIndex = 1
-
-    while (buffer.remaining() >= 4) {
-      val extendedId = buffer.int
-      val localId = localIdIndex++
-      val model = (extendedId ushr 16) and 0xFFFF
-
-      muList.add(mapOf("extendedId" to extendedId, "localId" to localId, "model" to model))
-    }
-
-    val devEuiLong = parseDevEuiToLong(devEUI)
-
-    val joinNotification = mapOf("devEui" to devEuiLong, "deviceId" to deviceId, "muList" to muList)
-
-    log.info("[FPORT 16 SUCCESS] DevEUI={} ({}), MU Trovate={}", deviceId, devEuiLong, muList.size)
-    return objectMapper.writeValueAsString(joinNotification)
-  }
-
-  private fun decodePayload33(
-          frmPayload: String,
-          devEUI: String,
-          deviceId: String,
-          timeISO: String
-  ): String {
-    val bytes = decodeBase64Payload(frmPayload, 33) ?: return ""
-
-    if (bytes.isEmpty()) {
-      log.warn("[FPORT 33 WARNING] Payload vuoto per DevEUI={}", devEUI)
-      return ""
-    }
-
-    val buffer = ByteBuffer.wrap(bytes)
-
-    val configVersion = buffer.get().toInt() and 0xFF
-
-    val remainingBytes = ByteArray(buffer.remaining())
-    buffer.get(remainingBytes)
-
-    val devEuiLong = parseDevEuiToLong(devEUI)
-
-    val configNotification =
-            mapOf(
-                    "devEui" to devEuiLong,
-                    "deviceId" to deviceId,
-                    "configVersion" to configVersion,
-                    "timestamp" to timeISO,
-                    "rawPayload" to Base64.getEncoder().encodeToString(remainingBytes)
-            )
-
-    log.info(
-            "[FPORT 33 SUCCESS] DevEUI={} ({}), ConfigVersion={}",
-            deviceId,
-            devEuiLong,
-            configVersion
-    )
-    return objectMapper.writeValueAsString(configNotification)
-  }
-
-  private fun decodePayload49(
-          frmPayload: String,
-          devEUI: String,
-          deviceId: String,
-          timeISO: String
-  ): String {
-    val bytes = decodeBase64Payload(frmPayload, 49) ?: return ""
-
-    if (bytes.isEmpty()) {
-      log.warn("[FPORT 49 WARNING] Payload vuoto per DevEUI={}", devEUI)
-      return ""
-    }
-
-    val buffer = ByteBuffer.wrap(bytes)
-
-    val configVersion = buffer.get().toInt() and 0xFF
-
-    val remainingBytes = ByteArray(buffer.remaining())
-    buffer.get(remainingBytes)
-
-    val devEuiLong = parseDevEuiToLong(devEUI)
-
-    val configNotification =
-            mapOf(
-                    "devEui" to devEuiLong,
-                    "deviceId" to deviceId,
-                    "configVersion" to configVersion,
-                    "timestamp" to timeISO,
-                    "rawPayload" to Base64.getEncoder().encodeToString(remainingBytes)
-            )
-
-    log.info(
-            "[FPORT 49 SUCCESS] DevEUI={} ({}), ConfigVersion={}",
-            deviceId,
-            devEuiLong,
-            configVersion
-    )
-    return objectMapper.writeValueAsString(configNotification)
-  }
-
-  private fun decodeBase64Payload(frmPayload: String, fport: Int): ByteArray? {
-    return try {
-      Base64.getDecoder().decode(frmPayload)
-    } catch (e: Exception) {
-      log.error("[FPORT {} ERROR] frm_payload non e' un Base64 valido: '{}'", fport, frmPayload)
-      null
-    }
   }
 
   private fun parseDevEuiToLong(devEUI: String): Long {
